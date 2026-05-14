@@ -19,7 +19,34 @@
     "replyLabel": "Reply"
   },
 
+  "actions": {
+    "showAdvancedInfo": "Show Advanced Info"
+  },
+  "contextMenu": {
+    "reply": "Reply",
+    "directMessage": "DM {{name}}",
+    "copyText": "Copy Text",
+    "copyPacketId": "Copy Packet ID",
+    "traceRoute": "Trace Route",
+    "deleteMessage": "Delete Message",
+    "packetInfo": "Packet Info",
+    "packetId": "Packet ID",
+    "priority": "Priority",
+    "flags": "Flags"
+  },
+  "replyTo": "Replying to {{name}}",
+  "cancelReply": "Cancel reply",
+  "replyMissing": "Original message not available",
+  "advancedInfo": {
+    "direct": "Direct",
+    "hops": "{{count}} hop",
+    "hops_other": "{{count}} hops",
+    "mqtt": "MQTT",
+    "ackRequested": "Ack Requested",
+    "pkiEncrypted": "PKI Encrypted"
+  },
   "deliveryStatus": {
+    "acknowledgedBy": "Acknowledged by {{name}}",
     "delivered": {
       "label": "Message delivered",
       "displayText": "Message delivered"

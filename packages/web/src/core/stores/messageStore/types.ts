@@ -15,6 +15,19 @@ interface MessageBase {
   messageId: number;
   state: MessageState;
   message: string;
+  // Rich packet metadata — only present on received (not sent) messages
+  rxSnr?: number;
+  rxRssi?: number;
+  hopsAway?: number;
+  hopStart?: number;
+  hopLimit?: number;
+  viaMqtt?: boolean;
+  priority?: number;
+  wantAck?: boolean;
+  // Packet ID this message is replying to. 0/undefined means not a reply.
+  replyId?: number;
+  // Node number that acknowledged this sent message (via Routing NONE).
+  ackedBy?: number;
 }
 
 interface GenericMessage<T extends MessageType> extends MessageBase {

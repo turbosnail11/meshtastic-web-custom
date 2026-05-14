@@ -8,10 +8,12 @@ import { Avatar } from "@components/UI/Avatar.tsx";
 import { Input } from "@components/UI/Input.tsx";
 import { SidebarButton } from "@components/UI/Sidebar/SidebarButton.tsx";
 import { SidebarSection } from "@components/UI/Sidebar/SidebarSection.tsx";
+import { useAdvancedInfo, useSetAdvancedInfo } from "@core/hooks/useAdvancedInfo.ts";
 import { useToast } from "@core/hooks/useToast.ts";
 import {
   MessageState,
   MessageType,
+  useAppStore,
   useDevice,
   useMessages,
   useNodeDB,
@@ -21,7 +23,7 @@ import { cn } from "@core/utils/cn.ts";
 import { randId } from "@core/utils/randId.ts";
 import { Protobuf, Types } from "@meshtastic/core";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { HashIcon, LockIcon, LockOpenIcon } from "lucide-react";
+import { HashIcon, InfoIcon, LockIcon, LockOpenIcon } from "lucide-react";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getChannelName } from "../components/PageComponents/Channels/Channels.tsx";
@@ -48,6 +50,9 @@ export const MessagesPage = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { isCollapsed } = useSidebar();
+  const showAdvancedInfo = useAdvancedInfo();
+  const setShowAdvancedInfo = useSetAdvancedInfo();
+  const setPendingReply = useAppStore((s) => s.setPendingReply);
   const [searchTerm, setSearchTerm] = useState<string>("");
   const { t } = useTranslation(["messages", "channels", "ui"]);
   const deferredSearch = useDeferredValue(searchTerm);
@@ -74,6 +79,11 @@ export const MessagesPage = () => {
       navigateToChat(MessageType.Broadcast, defaultChannel?.index.toString() ?? "0");
     }
   }, [type, chatId, filteredChannels, navigateToChat]);
+
+  // Clear any pending reply when switching chats
+  useEffect(() => {
+    setPendingReply(null);
+  }, [type, chatId, setPendingReply]);
 
   const currentChannel = channels.get(numericChatId);
   const otherNode = getNode(numericChatId);
@@ -103,14 +113,14 @@ export const MessagesPage = () => {
   }, [deferredSearch, getNodes, getUnreadCount]);
 
   const sendText = useCallback(
-    async (message: string) => {
+    async (message: string, replyId?: number) => {
       const toValue = isDirect ? numericChatId : MessageType.Broadcast;
       const channelValue = isDirect ? Types.ChannelNumber.Primary : numericChatId;
 
       let messageId: number | undefined;
 
       try {
-        messageId = await connection?.sendText(message, toValue, true, channelValue);
+        messageId = await connection?.sendText(message, toValue, true, channelValue, replyId);
         if (messageId !== undefined) {
           if (chatType === MessageType.Broadcast) {
             setMessageState({
@@ -278,8 +288,8 @@ export const MessagesPage = () => {
       `}
       rightBar={rightSidebar}
       leftBar={leftSidebar}
-      actions={
-        isDirect && otherNode
+      actions={[
+        ...(isDirect && otherNode
           ? [
               {
                 key: "encryption",
@@ -296,8 +306,19 @@ export const MessagesPage = () => {
                 },
               },
             ]
-          : []
-      }
+          : []),
+        {
+          key: "advanced-info",
+          icon: InfoIcon,
+          label: t("actions.showAdvancedInfo"),
+          ariaLabel: t("actions.showAdvancedInfo"),
+          onClick: () => setShowAdvancedInfo(!showAdvancedInfo),
+          className: cn(
+            "border border-slate-300 dark:border-slate-600 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-300 dark:hover:text-black",
+            showAdvancedInfo && "bg-slate-200 dark:bg-slate-600 dark:text-white",
+          ),
+        },
+      ]}
     >
       <div className="flex flex-1 flex-col overflow-hidden">
         {renderChatContent()}

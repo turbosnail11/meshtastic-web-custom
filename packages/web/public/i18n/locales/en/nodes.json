@@ -37,7 +37,9 @@
   "nodesTable": {
     "headings": {
       "longName": "Long Name",
+      "packetReason": "Packet",
       "connection": "Connection",
+      "relayedBy": "Relayed by",
       "lastHeard": "Last Heard",
       "encryption": "Encryption",
       "model": "Model",
@@ -46,10 +48,32 @@
     "connectionStatus": {
       "direct": "Direct",
       "away": "away",
-      "viaMqtt": ", via MQTT"
+      "mqtt": "MQTT",
+      "viaMqtt": ", via MQTT",
+      "signal": {
+        "good": "Good",
+        "fair": "Fair",
+        "poor": "Poor",
+        "title": "{{strength}} direct signal ({{percent}}%)"
+      }
     },
     "lastHeardStatus": {
       "never": "Never"
+    },
+    "encryption": {
+      "publicKey": {
+        "label": "Public key enabled",
+        "description": "This node has a public key. Direct messages can use PKI encryption."
+      },
+      "noPublicKey": {
+        "label": "No public key",
+        "description": "This node has not shared a public key. Direct messages fall back to channel encryption."
+      }
+    },
+    "signal": {
+      "none": "No direct signal",
+      "stale": "(stale)",
+      "staleTitle": "Last direct signal is stale"
     }
   },
 

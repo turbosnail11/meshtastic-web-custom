@@ -5,6 +5,7 @@ import React, { useMemo, useState } from "react";
 export interface Heading {
   title: string;
   sortable: boolean;
+  className?: string;
 }
 
 interface Cell {
@@ -102,6 +103,7 @@ export const Table = ({ headings, rows }: TableProps) => {
               className={cn(
                 "py-2 pr-3 text-left",
                 heading.sortable && "cursor-pointer hover:brightness-hover active:brightness-press",
+                heading.className,
               )}
               onClick={() => heading.sortable && handleSort(heading.title)}
               onKeyUp={(e) => {

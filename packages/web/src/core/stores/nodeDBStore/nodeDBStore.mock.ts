@@ -10,6 +10,7 @@ export const mockNodeDBStore: NodeDB = {
   myNodeNum: 0,
   nodeErrors: new Map(),
   nodeMap: new Map(),
+  nodePacketMetadata: new Map(),
 
   addNode: vi.fn(),
   addUser: vi.fn(),
@@ -27,6 +28,7 @@ export const mockNodeDBStore: NodeDB = {
   getNodesLength: vi.fn().mockReturnValue(0),
   getNode: vi.fn().mockReturnValue(undefined),
   getMyNode: vi.fn(),
+  getNodePacketMetadata: vi.fn().mockReturnValue(undefined),
   updateFavorite: vi.fn(),
   updateIgnore: vi.fn(),
   setNodeNum: vi.fn(),

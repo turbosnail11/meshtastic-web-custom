@@ -67,6 +67,7 @@ export interface MessageStore extends MessageStoreData {
 
   deleteAllMessages: () => void;
   clearMessageByMessageId: (params: ClearMessageParams) => void;
+  setMessageAckedBy: (messageId: number, ackedBy: number) => void;
 }
 
 export interface MessageStoreState {
@@ -330,6 +331,43 @@ function messageStoreFactory(
           } else {
             console.warn(`Message entry ${parentKey} not found for message deletion.`);
           }
+        }),
+      );
+    },
+
+    setMessageAckedBy: (messageId, ackedBy) => {
+      set(
+        produce<PrivateMessageStoreState>((draft) => {
+          const state = draft.messageStores.get(id);
+          if (!state) {
+            console.debug("[ack] setMessageAckedBy: no store for id=%d", id);
+            return;
+          }
+          for (const log of state.messages.direct.values()) {
+            const m = log.get(messageId);
+            if (m) {
+              m.ackedBy = ackedBy;
+              console.debug(
+                "[ack] setMessageAckedBy: matched direct messageId=%d ackedBy=0x%s",
+                messageId,
+                ackedBy.toString(16),
+              );
+              return;
+            }
+          }
+          for (const log of state.messages.broadcast.values()) {
+            const m = log.get(messageId);
+            if (m) {
+              m.ackedBy = ackedBy;
+              console.debug(
+                "[ack] setMessageAckedBy: matched broadcast messageId=%d ackedBy=0x%s",
+                messageId,
+                ackedBy.toString(16),
+              );
+              return;
+            }
+          }
+          console.debug("[ack] setMessageAckedBy: messageId=%d not found in store", messageId);
         }),
       );
     },

@@ -10,6 +10,7 @@ import { PageLayout } from "@components/PageLayout.tsx";
 import { Sidebar } from "@components/Sidebar.tsx";
 import { SonarHistoryModal } from "@components/SonarHistoryModal.tsx";
 import { SonarModal } from "@components/SonarModal.tsx";
+import { Popover, PopoverContent, PopoverTrigger } from "@components/UI/Popover.tsx";
 import { Avatar } from "@components/UI/Avatar.tsx";
 import { Input } from "@components/UI/Input.tsx";
 import { RadarIcon } from "@components/UI/RadarIcon.tsx";
@@ -17,9 +18,23 @@ import useLang from "@core/hooks/useLang.ts";
 import { useSonar } from "@core/hooks/useSonar.ts";
 import { useAppStore, useDevice, useNodeDB } from "@core/stores";
 import { type SonarRun, useSonarStore } from "@core/stores/sonarStore/index.ts";
+import { cn } from "@core/utils/cn.ts";
 import { Protobuf, type Types } from "@meshtastic/core";
 import { numberToHexUnpadded } from "@noble/curves/abstract/utils";
-import { ClockIcon, LockIcon, LockOpenIcon } from "lucide-react";
+import {
+  ActivityIcon,
+  ClockIcon,
+  CloudIcon,
+  InfoIcon,
+  LockKeyholeIcon,
+  LockIcon,
+  LockOpenIcon,
+  MapPinIcon,
+  MessageSquareIcon,
+  PackageIcon,
+  RouteIcon,
+  SkullIcon,
+} from "lucide-react";
 import { type JSX, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { base16 } from "rfc4648";
@@ -27,6 +42,215 @@ import { base16 } from "rfc4648";
 const NODEDB_DEBOUNCE_MS = 250;
 // Stable reference so the sonar runs selector doesn't churn on every render.
 const EMPTY_RUNS: SonarRun[] = [];
+const NODE_ICON_BUTTON_CLASS =
+  "inline-flex size-6 shrink-0 items-center justify-center rounded hover:bg-slate-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-500 dark:hover:bg-slate-700";
+const NODE_ICON_POPOVER_CLASS = "w-64 text-sm";
+
+function formatPortnum(portnum?: Protobuf.Portnums.PortNum): string {
+  if (portnum === undefined) {
+    return "Unknown packet";
+  }
+  return (
+    Protobuf.Portnums.PortNum[portnum]
+      ?.replace(/_APP$/, "")
+      .replaceAll("_", " ")
+      .toLowerCase()
+      .replace(/\b\w/g, (char) => char.toUpperCase()) ?? `Packet ${portnum}`
+  );
+}
+
+function PacketReasonDescription({
+  packetState,
+  portnum,
+}: {
+  packetState?: "decoded" | "encrypted" | "unknown" | "deadTransit";
+  portnum?: Protobuf.Portnums.PortNum;
+}): string {
+  if (packetState === "deadTransit") {
+    return "This packet was not for this node, and no hops remain.";
+  }
+  if (packetState === "encrypted") {
+    return "This packet was encrypted or otherwise not decoded locally, so its app port is not visible.";
+  }
+  if (portnum === undefined) {
+    return "The latest packet did not include a decoded app port.";
+  }
+  return `Latest decoded packet type: ${formatPortnum(portnum)}.`;
+}
+
+function NodeInfoPopoverIcon({
+  label,
+  description,
+  children,
+}: {
+  label: string;
+  description: string;
+  children: JSX.Element;
+}): JSX.Element {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type="button" aria-label={label} className={NODE_ICON_BUTTON_CLASS}>
+          {children}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" sideOffset={8} className={NODE_ICON_POPOVER_CLASS}>
+        <div className="font-medium text-slate-900 dark:text-slate-100">{label}</div>
+        <p className="mt-1 text-slate-600 dark:text-slate-300">{description}</p>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function PacketReasonIcon({
+  packetState,
+  portnum,
+}: {
+  packetState?: "decoded" | "encrypted" | "unknown" | "deadTransit";
+  portnum?: Protobuf.Portnums.PortNum;
+}): JSX.Element {
+  const label =
+    packetState === "deadTransit"
+      ? "No hops left"
+      : packetState === "encrypted"
+        ? "Encrypted packet"
+        : formatPortnum(portnum);
+  const description = PacketReasonDescription({ packetState, portnum });
+  const className = "mx-auto size-4";
+  const wrap = (icon: JSX.Element) => (
+    <NodeInfoPopoverIcon label={label} description={description}>
+      {icon}
+    </NodeInfoPopoverIcon>
+  );
+
+  if (packetState === "deadTransit") {
+    return wrap(<SkullIcon className={className} aria-hidden="true" />);
+  }
+  if (packetState === "encrypted") {
+    return wrap(<LockKeyholeIcon className={className} aria-hidden="true" />);
+  }
+
+  switch (portnum) {
+    case Protobuf.Portnums.PortNum.TEXT_MESSAGE_APP:
+    case Protobuf.Portnums.PortNum.TEXT_MESSAGE_COMPRESSED_APP:
+      return wrap(<MessageSquareIcon className={className} aria-hidden="true" />);
+    case Protobuf.Portnums.PortNum.POSITION_APP:
+      return wrap(<MapPinIcon className={className} aria-hidden="true" />);
+    case Protobuf.Portnums.PortNum.NODEINFO_APP:
+      return wrap(<InfoIcon className={className} aria-hidden="true" />);
+    case Protobuf.Portnums.PortNum.TELEMETRY_APP:
+      return wrap(<ActivityIcon className={className} aria-hidden="true" />);
+    case Protobuf.Portnums.PortNum.ROUTING_APP:
+    case Protobuf.Portnums.PortNum.TRACEROUTE_APP:
+      return wrap(<RouteIcon className={className} aria-hidden="true" />);
+    default:
+      return wrap(<PackageIcon className={className} aria-hidden="true" />);
+  }
+}
+
+function relayFallback(kind: "unknown" | "ambiguous", relayNode: number): string {
+  const hex = `0x${(relayNode & 0xff).toString(16).padStart(2, "0").toUpperCase()}`;
+  return kind === "unknown" ? `Unknown relay ${hex}` : `Ambiguous relay ${hex}`;
+}
+
+function EncryptionIndicator({ hasPublicKey }: { hasPublicKey: boolean }): JSX.Element {
+  const { t } = useTranslation("nodes");
+  const label = hasPublicKey
+    ? t("nodesTable.encryption.publicKey.label")
+    : t("nodesTable.encryption.noPublicKey.label");
+  const description = hasPublicKey
+    ? t("nodesTable.encryption.publicKey.description")
+    : t("nodesTable.encryption.noPublicKey.description");
+  const Icon = hasPublicKey ? LockIcon : LockOpenIcon;
+
+  return (
+    <NodeInfoPopoverIcon label={label} description={description}>
+      <Icon
+        className={hasPublicKey ? "text-green-600" : "text-yellow-500"}
+        size={16}
+        aria-hidden="true"
+      />
+    </NodeInfoPopoverIcon>
+  );
+}
+
+function directSignalStrength(percent: number): {
+  key: "good" | "fair" | "poor";
+  bars: number;
+  className: string;
+} {
+  if (percent >= 70) {
+    return {
+      key: "good",
+      bars: 3,
+      className: "bg-green-500",
+    };
+  }
+  if (percent >= 35) {
+    return {
+      key: "fair",
+      bars: 2,
+      className: "bg-yellow-500",
+    };
+  }
+  return {
+    key: "poor",
+    bars: 1,
+    className: "bg-red-500",
+  };
+}
+
+function DirectSignalStrength({ percent }: { percent: number }): JSX.Element {
+  const { t } = useTranslation("nodes");
+  const strength = directSignalStrength(percent);
+  const label = t(`nodesTable.connectionStatus.signal.${strength.key}`);
+  const roundedPercent = Math.round(percent);
+
+  return (
+    <span
+      className="inline-flex items-center gap-1.5"
+      title={t("nodesTable.connectionStatus.signal.title", {
+        strength: label,
+        percent: roundedPercent,
+      })}
+      aria-label={t("nodesTable.connectionStatus.signal.title", {
+        strength: label,
+        percent: roundedPercent,
+      })}
+    >
+      <span className="inline-flex h-4 items-end gap-0.5" aria-hidden="true">
+        {[1, 2, 3].map((bar) => (
+          <span
+            key={bar}
+            className={cn(
+              "w-1 rounded-sm",
+              bar === 1 ? "h-1.5" : bar === 2 ? "h-2.5" : "h-4",
+              bar <= strength.bars ? strength.className : "bg-slate-300 dark:bg-slate-600",
+            )}
+          />
+        ))}
+      </span>
+      <span>{label}</span>
+    </span>
+  );
+}
+
+// CLIENT is the protobuf default — every node we receive will report it
+// unless their config says otherwise, so suppress the label for plain Clients
+// to keep the table uncluttered. All other roles are surfaced.
+function formatRoleLabel(
+  role: Protobuf.Config.Config_DeviceConfig_Role | undefined,
+): string | undefined {
+  if (role === undefined) return undefined;
+  if (role === Protobuf.Config.Config_DeviceConfig_Role.CLIENT) return undefined;
+  const name = Protobuf.Config.Config_DeviceConfig_Role[role];
+  if (!name) return undefined;
+  return name
+    .toLowerCase()
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
 
 export interface DeleteNoteDialogProps {
   open: boolean;
@@ -114,13 +338,23 @@ const NodesPage = (): JSX.Element => {
   );
 
   // subscribe to actual data (nodes array) and to nodeErrors ref for badge updates
-  const { nodes: filteredNodes, hasNodeError } = useNodeDB(
+  const {
+    nodes: filteredNodes,
+    hasNodeError,
+    getNodePacketMetadata,
+  } = useNodeDB(
     (db) => ({
       nodes: db.getNodes(predicate, true),
       hasNodeError: db.hasNodeError,
+      getNodePacketMetadata: db.getNodePacketMetadata,
+      _metadataRef: db.nodePacketMetadata,
       _errorsRef: db.nodeErrors, // include the Map ref so UI also re-renders on error changes
     }),
     { debounce: NODEDB_DEBOUNCE_MS },
+  );
+  const visibleNodes = useMemo(
+    () => filteredNodes.filter((node) => node.num !== hardware.myNodeNum),
+    [filteredNodes, hardware.myNodeNum],
   );
   const handleTraceroute = useCallback(
     (traceroute: Types.PacketMetadata<Protobuf.Mesh.RouteDiscovery>) => {
@@ -128,7 +362,7 @@ const NodesPage = (): JSX.Element => {
       if (sonar.isSonarResponsePacket(traceroute.id)) return;
       setSelectedTraceroute(traceroute);
     },
-    [sonar.isSonarResponsePacket],
+    [sonar],
   );
 
   const handleLocation = useCallback(
@@ -143,7 +377,7 @@ const NodesPage = (): JSX.Element => {
       if (sonar.isSonarResponsePacket(location.id)) return;
       setSelectedLocation(location);
     },
-    [hardware.myNodeNum, sonar.isSonarResponsePacket],
+    [hardware.myNodeNum, sonar],
   );
 
   function handleNodeInfoDialog(nodeNum: number): void {
@@ -173,16 +407,27 @@ const NodesPage = (): JSX.Element => {
 
   const tableHeadings: Heading[] = [
     { title: "", sortable: false },
-    { title: t("nodesTable.headings.longName"), sortable: true },
+    {
+      title: t("nodesTable.headings.longName"),
+      sortable: true,
+      className: "pl-5",
+    },
+    {
+      title: t("nodesTable.headings.packetReason", { defaultValue: "Packet" }),
+      sortable: true,
+    },
     { title: t("nodesTable.headings.connection"), sortable: true },
+    {
+      title: t("nodesTable.headings.relayedBy", { defaultValue: "Relayed by" }),
+      sortable: true,
+    },
     { title: t("nodesTable.headings.lastHeard"), sortable: true },
-    { title: t("nodesTable.headings.encryption"), sortable: false },
     { title: t("unit.snr"), sortable: true },
     { title: t("nodesTable.headings.model"), sortable: true },
     { title: t("nodesTable.headings.macAddress"), sortable: true },
   ];
 
-  const tableRows: DataRow[] = filteredNodes.map((node) => {
+  const tableRows: DataRow[] = visibleNodes.map((node) => {
     const macAddress =
       base16
         .stringify(node.user?.macaddr ?? [])
@@ -195,6 +440,24 @@ const NodesPage = (): JSX.Element => {
       t("fallbackName", {
         last4: shortName,
       });
+    const roleLabel = formatRoleLabel(node.user?.role);
+    const metadata = getNodePacketMetadata(node.num);
+    const hopsAway = metadata?.hopsAway ?? node.hopsAway;
+    const viaMqtt = metadata?.viaMqtt ?? node.viaMqtt;
+    const directSnr = metadata?.directSnr;
+    const relayText =
+      metadata?.relay.status === "resolved"
+        ? metadata.relay.nodeName
+        : metadata?.relay.status === "unknown" || metadata?.relay.status === "ambiguous"
+          ? relayFallback(metadata.relay.status, metadata.relay.relayNode)
+          : "";
+    const directSignalPercent =
+      directSnr === undefined ? undefined : Math.min(Math.max((directSnr + 10) * 5, 0), 100);
+    const hasFreshDirectSignal =
+      viaMqtt === false &&
+      hopsAway === 0 &&
+      directSignalPercent !== undefined &&
+      !metadata?.directSignalStale;
 
     return {
       id: node.num,
@@ -217,30 +480,66 @@ const NodesPage = (): JSX.Element => {
         },
         {
           content: (
-            <button
-              type="button"
-              onClick={() => handleNodeInfoDialog(node.num)}
-              className="cursor-pointer underline ml-2 whitespace-break-spaces bg-transparent border-0 p-0 text-left"
-            >
-              {longName}
-            </button>
+            <div className="ml-2 flex items-center gap-2">
+              <EncryptionIndicator hasPublicKey={!!node.user?.publicKey?.length} />
+              <div className="flex flex-col">
+                <button
+                  type="button"
+                  onClick={() => handleNodeInfoDialog(node.num)}
+                  className="cursor-pointer underline whitespace-break-spaces bg-transparent border-0 p-0 text-left"
+                >
+                  {longName}
+                </button>
+                {roleLabel && (
+                  <span className="text-xs text-slate-500 dark:text-slate-400">{roleLabel}</span>
+                )}
+              </div>
+            </div>
           ),
           sortValue: longName,
         },
         {
           content: (
-            <Mono className="w-16">
-              {node.hopsAway !== undefined
-                ? node?.viaMqtt === false && node.hopsAway === 0
-                  ? t("nodesTable.connectionStatus.direct")
-                  : `${node.hopsAway?.toString()} ${
-                      (node.hopsAway ?? 0 > 1) ? t("unit.hop.plural") : t("unit.hops_one")
-                    } ${t("nodesTable.connectionStatus.away")}`
-                : t("unknown.longName")}
-              {node?.viaMqtt === true ? t("nodesTable.connectionStatus.viaMqtt") : ""}
+            <Mono>
+              <PacketReasonIcon packetState={metadata?.packetState} portnum={metadata?.portnum} />
             </Mono>
           ),
-          sortValue: node.hopsAway ?? Number.MAX_SAFE_INTEGER,
+          sortValue:
+            metadata?.packetState === "deadTransit"
+              ? "No hops left"
+              : metadata?.packetState === "encrypted"
+                ? "Encrypted packet"
+                : formatPortnum(metadata?.portnum),
+        },
+        {
+          content: (
+            <Mono className="w-16">
+              {hasFreshDirectSignal ? (
+                <DirectSignalStrength percent={directSignalPercent} />
+              ) : hopsAway !== undefined ? (
+                viaMqtt === false && hopsAway === 0 ? (
+                  t("nodesTable.connectionStatus.direct")
+                ) : (
+                  `${hopsAway.toString()} ${
+                    hopsAway > 1 ? t("unit.hop.plural") : t("unit.hop.one")
+                  }`
+                )
+              ) : (
+                t("unknown.longName")
+              )}
+              {viaMqtt === true && (
+                <CloudIcon
+                  className="ml-1 inline-block size-4 align-text-bottom"
+                  aria-label={t("nodesTable.connectionStatus.mqtt")}
+                />
+              )}
+            </Mono>
+          ),
+          sortValue: hopsAway ?? Number.MAX_SAFE_INTEGER,
+        },
+        {
+          content: <Mono>{relayText}</Mono>,
+          sortValue: relayText,
         },
         {
           content: (
@@ -256,27 +555,33 @@ const NodesPage = (): JSX.Element => {
         },
         {
           content: (
-            <Mono>
-              {node.user?.publicKey && node.user?.publicKey.length > 0 ? (
-                <LockIcon className="text-green-600 mx-auto" />
+            <Mono
+              className={metadata?.directSignalStale ? "text-yellow-600 dark:text-yellow-300" : ""}
+              title={
+                metadata?.directSignalStale
+                  ? t("nodesTable.signal.staleTitle", {
+                      defaultValue: "Last direct signal is stale",
+                    })
+                  : undefined
+              }
+            >
+              {directSnr === undefined || directSignalPercent === undefined ? (
+                t("nodesTable.signal.none", {
+                  defaultValue: "No direct signal",
+                })
               ) : (
-                <LockOpenIcon className="text-yellow-300 mx-auto" />
+                <>
+                  {directSnr}
+                  {t("unit.dbm")}/{directSignalPercent}%/{(directSnr + 10) * 5}
+                  {t("unit.raw")}
+                  {metadata?.directSignalStale
+                    ? ` ${t("nodesTable.signal.stale", { defaultValue: "(stale)" })}`
+                    : ""}
+                </>
               )}
             </Mono>
           ),
-          sortValue: "", // Non-sortable column
-        },
-        {
-          content: (
-            <Mono>
-              {node.snr}
-              {t("unit.dbm")}/{Math.min(Math.max((node.snr + 10) * 5, 0), 100)}
-              %/{/* Percentage */}
-              {(node.snr + 10) * 5}
-              {t("unit.raw")}
-            </Mono>
-          ),
-          sortValue: node.snr,
+          sortValue: directSnr ?? Number.NEGATIVE_INFINITY,
         },
         {
           content: <Mono>{Protobuf.Mesh.HardwareModel[node.user?.hwModel ?? 0]}</Mono>,

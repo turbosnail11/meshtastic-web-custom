@@ -2,6 +2,18 @@ import { MessageState, MessageType } from "@core/stores";
 import type { Message } from "@core/stores/messageStore/types.ts";
 import type { Types } from "@meshtastic/core";
 
+type RichMeta = {
+  rxSnr?: number;
+  rxRssi?: number;
+  hopsAway?: number;
+  hopStart?: number;
+  hopLimit?: number;
+  viaMqtt?: boolean;
+  priority?: number;
+  wantAck?: boolean;
+  replyId?: number;
+};
+
 class PacketToMessageDTO {
   channel: Types.ChannelNumber;
   to: number;
@@ -11,8 +23,9 @@ class PacketToMessageDTO {
   state: MessageState;
   message: string;
   type: MessageType;
+  richMeta: RichMeta | undefined;
 
-  constructor(data: Types.PacketMetadata<string>, nodeNum: number) {
+  constructor(data: Types.PacketMetadata<string>, nodeNum: number, richMeta?: RichMeta) {
     this.channel = data.channel;
     this.to = data.to;
     this.from = data.from;
@@ -20,6 +33,7 @@ class PacketToMessageDTO {
     this.state = data.from !== nodeNum ? MessageState.Ack : MessageState.Waiting;
     this.message = data.data;
     this.type = data.type === "direct" ? MessageType.Direct : MessageType.Broadcast;
+    this.richMeta = richMeta;
 
     let dateTimestamp = Date.now();
     if (data.rxTime instanceof Date) {
@@ -46,8 +60,11 @@ class PacketToMessageDTO {
       state: this.state,
       message: this.message,
       type: this.type,
+      ...this.richMeta,
     };
   }
 }
+
+export type { RichMeta };
 
 export default PacketToMessageDTO;

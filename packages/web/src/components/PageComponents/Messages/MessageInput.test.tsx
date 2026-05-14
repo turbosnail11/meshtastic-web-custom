@@ -37,6 +37,10 @@ vi.mock("@core/stores", () => ({
     getDraft: mockGetDraft,
     clearDraft: mockClearDraft,
   })),
+  useAppStore: vi.fn(
+    (selector: (s: { pendingReply: null; setPendingReply: () => void }) => unknown) =>
+      selector({ pendingReply: null, setPendingReply: () => {} }),
+  ),
   MessageState: {
     Ack: "ack",
     Waiting: "waiting",
@@ -50,6 +54,7 @@ vi.mock("@core/stores", () => ({
 
 vi.mock("lucide-react", () => ({
   SendIcon: vi.fn(() => <svg data-testid="send-icon" />),
+  XIcon: vi.fn(() => <svg data-testid="x-icon" />),
 }));
 
 describe("MessageInput", () => {

@@ -131,6 +131,13 @@ export const ChannelChat = ({ messages = [] }: ChannelChatProps) => {
     [sorted, dayLabelFmt, t],
   );
 
+  // Lookup map so MessageItem can resolve replyId → original Message in O(1)
+  const messageById = useMemo(() => {
+    const map = new Map<number, Message>();
+    for (const m of messages) map.set(m.messageId, m);
+    return map;
+  }, [messages]);
+
   if (!messages.length) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center">
@@ -149,7 +156,7 @@ export const ChannelChat = ({ messages = [] }: ChannelChatProps) => {
               key={message.messageId ?? `${message.from}-${message.date}`}
               fallback={<MessageSkeleton />}
             >
-              <MessageItem message={message} />
+              <MessageItem message={message} getRepliedMessage={(id) => messageById.get(id)} />
             </Suspense>
           ))}
           <DateDelimiter label={label} />

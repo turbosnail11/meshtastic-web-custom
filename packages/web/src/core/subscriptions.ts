@@ -1,4 +1,5 @@
-import PacketToMessageDTO from "@core/dto/PacketToMessageDTO.ts";
+import { fromBinary } from "@bufbuild/protobuf";
+import PacketToMessageDTO, { type RichMeta } from "@core/dto/PacketToMessageDTO.ts";
 import { useNewNodeNum } from "@core/hooks/useNewNodeNum";
 import { type Device, type MessageStore, MessageType, type NodeDB } from "@core/stores";
 import { type MeshDevice, Protobuf } from "@meshtastic/core";
@@ -9,6 +10,9 @@ export const subscribeAll = (
   nodeDB: NodeDB,
 ) => {
   let myNodeNum = 0;
+  // Buffer rich packet metadata keyed by packet ID so onMessagePacket can
+  // pick it up. onMeshPacket fires before the specialized events in the core.
+  const pendingRichMeta = new Map<number, RichMeta>();
 
   connection.events.onDeviceMetadataPacket.subscribe((metadataPacket) => {
     device.addMetadata(metadataPacket.from, metadataPacket.data);
@@ -79,7 +83,9 @@ export const subscribeAll = (
 
   connection.events.onMessagePacket.subscribe((messagePacket) => {
     // incoming and outgoing messages are handled by this event listener
-    const dto = new PacketToMessageDTO(messagePacket, myNodeNum);
+    const richMeta = pendingRichMeta.get(messagePacket.id);
+    if (richMeta) pendingRichMeta.delete(messagePacket.id);
+    const dto = new PacketToMessageDTO(messagePacket, myNodeNum, richMeta);
     const message = dto.toMessage();
     messageStore.saveMessage(message);
 
@@ -105,10 +111,95 @@ export const subscribeAll = (
   });
 
   connection.events.onMeshPacket.subscribe((meshPacket) => {
+    const portnum =
+      meshPacket.payloadVariant.case === "decoded"
+        ? meshPacket.payloadVariant.value.portnum
+        : undefined;
+    const hopsAway = Math.max(0, meshPacket.hopStart - meshPacket.hopLimit);
+    const transportMechanism = meshPacket.transportMechanism;
+    const viaMqtt =
+      meshPacket.viaMqtt ||
+      transportMechanism === Protobuf.Mesh.MeshPacket_TransportMechanism.TRANSPORT_MQTT;
+
+    // Routing ack — record who acknowledged our sent message.
+    // proto3 serializes NONE (value 0) as an empty payload, so we can't rely
+    // on parsing the Routing message: a successful ack often comes through as
+    // empty bytes. Instead, treat any non-error routing response that targets
+    // one of our outgoing packets as an ack.
+    if (
+      portnum === Protobuf.Portnums.PortNum.ROUTING_APP &&
+      meshPacket.payloadVariant.case === "decoded"
+    ) {
+      const decoded = meshPacket.payloadVariant.value;
+      console.debug(
+        "[ack] ROUTING_APP from=0x%s requestId=%d payloadBytes=%d",
+        meshPacket.from.toString(16),
+        decoded.requestId,
+        decoded.payload.length,
+      );
+      if (decoded.requestId !== 0) {
+        let isError = false;
+        try {
+          const routing = fromBinary(Protobuf.Mesh.RoutingSchema, decoded.payload);
+          if (
+            routing.variant.case === "errorReason" &&
+            routing.variant.value !== Protobuf.Mesh.Routing_Error.NONE
+          ) {
+            isError = true;
+          }
+        } catch {
+          // empty/unparseable payload = NONE ack
+        }
+        if (!isError && meshPacket.from !== myNodeNum) {
+          console.debug(
+            "[ack] -> setMessageAckedBy(%d, 0x%s)",
+            decoded.requestId,
+            meshPacket.from.toString(16),
+          );
+          messageStore.setMessageAckedBy(decoded.requestId, meshPacket.from);
+        } else if (!isError) {
+          console.debug(
+            "[ack] -> self-originated routing ack for messageId=%d, skipping ackedBy attribution",
+            decoded.requestId,
+          );
+        } else {
+          console.debug("[ack] -> error response, skipping");
+        }
+      }
+    }
+
+    if (portnum === Protobuf.Portnums.PortNum.TEXT_MESSAGE_APP) {
+      const replyId =
+        meshPacket.payloadVariant.case === "decoded"
+          ? meshPacket.payloadVariant.value.replyId
+          : undefined;
+      pendingRichMeta.set(meshPacket.id, {
+        rxSnr: meshPacket.rxSnr,
+        rxRssi: meshPacket.rxRssi,
+        hopsAway,
+        hopStart: meshPacket.hopStart,
+        hopLimit: meshPacket.hopLimit,
+        viaMqtt,
+        priority: meshPacket.priority,
+        wantAck: meshPacket.wantAck,
+        replyId: replyId && replyId !== 0 ? replyId : undefined,
+      });
+    }
+
     nodeDB.processPacket({
       from: meshPacket.from,
+      to: meshPacket.to,
       snr: meshPacket.rxSnr,
+      rssi: meshPacket.rxRssi,
       time: meshPacket.rxTime,
+      portnum,
+      payloadVariant: meshPacket.payloadVariant.case ?? undefined,
+      hopsAway,
+      viaMqtt,
+      hopStart: meshPacket.hopStart,
+      hopLimit: meshPacket.hopLimit,
+      relayNode: meshPacket.relayNode,
+      transportMechanism,
     });
   });
 

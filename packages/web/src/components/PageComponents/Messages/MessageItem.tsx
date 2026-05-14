@@ -1,3 +1,4 @@
+import { MessageContextMenu } from "@components/MessageContextMenu.tsx";
 import { Avatar } from "@components/UI/Avatar.tsx";
 import {
   Tooltip,
@@ -6,12 +7,13 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@components/UI/Tooltip.tsx";
+import { useAdvancedInfo } from "@core/hooks/useAdvancedInfo.ts";
 import { MessageState, useAppStore, useDevice, useNodeDB } from "@core/stores";
 import type { Message } from "@core/stores/messageStore/types.ts";
 import { cn } from "@core/utils/cn.ts";
 import { type Protobuf, Types } from "@meshtastic/core";
 import type { LucideIcon } from "lucide-react";
-import { AlertCircle, CheckCircle2, CircleEllipsis } from "lucide-react";
+import { AlertCircle, CheckCircle2, CircleEllipsis, CloudIcon, SignalHighIcon } from "lucide-react";
 import { type ReactNode, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -86,12 +88,14 @@ const StatusTooltip = ({
 
 interface MessageItemProps {
   message: Message;
+  getRepliedMessage?: (messageId: number) => Message | undefined;
 }
 
-export const MessageItem = ({ message }: MessageItemProps) => {
+export const MessageItem = ({ message, getRepliedMessage }: MessageItemProps) => {
   const { config } = useDevice();
   const { getNode } = useNodeDB();
   const { t, i18n } = useTranslation("messages");
+  const showAdvancedInfo = useAdvancedInfo();
 
   // This will suspend if myNode is not available yet
   const myNode = useSuspendingMyNode();
@@ -158,7 +162,26 @@ export const MessageItem = ({ message }: MessageItemProps) => {
     };
   }, [messageUser, message.from, t, myNodeNum]);
 
-  const messageStatusInfo = getMessageStatusInfo(message.state);
+  const baseStatusInfo = getMessageStatusInfo(message.state);
+  const shouldShowAcker =
+    message.state === MessageState.Ack &&
+    message.ackedBy !== undefined &&
+    message.ackedBy !== message.from;
+  const ackerNode = shouldShowAcker ? getNode(message.ackedBy) : undefined;
+  const ackerName =
+    ackerNode?.user?.shortName ??
+    ackerNode?.user?.longName ??
+    (message.ackedBy !== undefined
+      ? `!${message.ackedBy.toString(16).padStart(8, "0").slice(-4).toUpperCase()}`
+      : undefined);
+  const messageStatusInfo: MessageStatusInfo =
+    shouldShowAcker && ackerName
+      ? {
+          ...baseStatusInfo,
+          displayText: t("deliveryStatus.acknowledgedBy", { name: ackerName }),
+          ariaLabel: t("deliveryStatus.acknowledgedBy", { name: ackerName }),
+        }
+      : baseStatusInfo;
   const StatusIconComponent = messageStatusInfo.icon;
 
   const messageDate = useMemo(() => (message.date ? new Date(message.date) : null), [message.date]);
@@ -195,45 +218,101 @@ export const MessageItem = ({ message }: MessageItemProps) => {
   );
   const dateTextStyle = "text-xs text-slate-500 dark:text-slate-400";
 
-  return (
-    <li className={messageItemWrapperClass}>
-      <div className="grid grid-cols-[auto_1fr] gap-x-2">
-        <Avatar size="sm" nodeNum={nodeNum} className="pt-0.5" showFavorite={isFavorite} />
+  const repliedMessage =
+    message.replyId && getRepliedMessage ? getRepliedMessage(message.replyId) : undefined;
+  const repliedSender = repliedMessage ? getNode(repliedMessage.from) : undefined;
+  const repliedSenderName =
+    repliedSender?.user?.longName ??
+    repliedSender?.user?.shortName ??
+    (repliedMessage
+      ? t("fallbackName", {
+          last4: repliedMessage.from.toString(16).toUpperCase().padStart(2, "0").slice(-4),
+        })
+      : undefined);
 
-        <div className="flex flex-col gap-0.5 min-w-0">
-          <div className="flex items-center gap-1.5">
-            <span className="font-medium text-sm text-slate-900 dark:text-slate-100 truncate mr-1">
-              {displayName}
-            </span>
-            {messageDate && (
-              <time dateTime={messageDate.toISOString()} className={dateTextStyle}>
-                <span aria-hidden="true">{formattedTime}</span>
-                <span className="sr-only">{fullDateTime}</span>
-              </time>
+  const hasAdvancedData =
+    message.rxSnr !== undefined ||
+    message.hopsAway !== undefined ||
+    message.rxRssi !== undefined ||
+    message.viaMqtt !== undefined;
+
+  return (
+    <MessageContextMenu message={message}>
+      <li className={messageItemWrapperClass}>
+        <div className="grid grid-cols-[auto_1fr] gap-x-2">
+          <Avatar size="sm" nodeNum={nodeNum} className="pt-0.5" showFavorite={isFavorite} />
+
+          <div className="flex flex-col gap-0.5 min-w-0">
+            <div className="flex items-center gap-1.5">
+              <span className="font-medium text-sm text-slate-900 dark:text-slate-100 truncate mr-1">
+                {displayName}
+              </span>
+              {messageDate && (
+                <time dateTime={messageDate.toISOString()} className={dateTextStyle}>
+                  <span aria-hidden="true">{formattedTime}</span>
+                  <span className="sr-only">{fullDateTime}</span>
+                </time>
+              )}
+              {shouldShowStatusIcon && (
+                <StatusTooltip statusInfo={messageStatusInfo}>
+                  <span aria-label={messageStatusInfo.ariaLabel} role="img">
+                    <StatusIconComponent
+                      className={cn("size-4 shrink-0", messageStatusInfo.iconClassName)}
+                      aria-hidden="true"
+                    />
+                  </span>
+                </StatusTooltip>
+              )}
+            </div>
+
+            {message.replyId !== undefined && message.replyId !== 0 && (
+              <div className="mt-0.5 mb-0.5 flex flex-col rounded-md border-l-2 border-blue-500 bg-slate-100 dark:bg-slate-800/50 px-2 py-1 text-xs">
+                {repliedMessage ? (
+                  <>
+                    <span className="font-medium text-slate-700 dark:text-slate-300">
+                      {repliedSenderName}
+                    </span>
+                    <span className="truncate text-slate-500 dark:text-slate-400">
+                      {repliedMessage.message}
+                    </span>
+                  </>
+                ) : (
+                  <span className="italic text-slate-500 dark:text-slate-400">
+                    {t("replyMissing")}
+                  </span>
+                )}
+              </div>
             )}
-            {shouldShowStatusIcon && (
-              <StatusTooltip statusInfo={messageStatusInfo}>
-                <span aria-label={messageStatusInfo.ariaLabel} role="img">
-                  <StatusIconComponent
-                    className={cn("size-4 shrink-0", messageStatusInfo.iconClassName)}
-                    aria-hidden="true"
-                  />
-                </span>
-              </StatusTooltip>
+
+            {message?.message && (
+              <div className="text-sm text-slate-800 dark:text-slate-200 whitespace-pre-wrap break-words">
+                {message.message}
+              </div>
+            )}
+
+            {showAdvancedInfo && hasAdvancedData && (
+              <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                {message.hopsAway === 0 && !message.viaMqtt ? (
+                  <span className="flex items-center gap-0.5">
+                    <SignalHighIcon size={12} aria-hidden="true" />
+                    {t("advancedInfo.direct")}
+                  </span>
+                ) : message.hopsAway !== undefined ? (
+                  <span>{t("advancedInfo.hops", { count: message.hopsAway })}</span>
+                ) : null}
+                {message.viaMqtt && (
+                  <span className="flex items-center gap-0.5">
+                    <CloudIcon size={12} aria-hidden="true" />
+                    {t("advancedInfo.mqtt")}
+                  </span>
+                )}
+                {message.rxSnr !== undefined && <span>{message.rxSnr} dB SNR</span>}
+                {message.rxRssi !== undefined && <span>{message.rxRssi} dBm</span>}
+              </div>
             )}
           </div>
-
-          {message?.message && (
-            <div className="text-sm text-slate-800 dark:text-slate-200 whitespace-pre-wrap break-words">
-              {message.message}
-            </div>
-          )}
         </div>
-      </div>
-      {/* Actions Menu Placeholder */}
-      {/* <div className="absolute top-1 right-1">
-        <MessageActionsMenu onReply={() => console.log("Reply")} />
-       </div> */}
-    </li>
+      </li>
+    </MessageContextMenu>
   );
 };

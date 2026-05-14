@@ -2,11 +2,19 @@ import { create } from "@bufbuild/protobuf";
 import { featureFlags } from "@core/services/featureFlags";
 import { validateIncomingNode } from "@core/stores/nodeDBStore/nodeValidation";
 import { createStorage } from "@core/stores/utils/indexDB.ts";
-import { Protobuf, type Types } from "@meshtastic/core";
+import { Constants, Protobuf, type Types } from "@meshtastic/core";
 import { produce } from "immer";
 import { create as createStore, type StateCreator } from "zustand";
 import { type PersistOptions, persist, subscribeWithSelector } from "zustand/middleware";
-import type { NodeError, NodeErrorType, ProcessPacketParams } from "./types.ts";
+import {
+  DIRECT_SIGNAL_STALE_AFTER_MS,
+  type NodeError,
+  type NodeErrorType,
+  type NodePacketMetadata,
+  type NodePacketMetadataView,
+  type ProcessPacketParams,
+  type RelayResolution,
+} from "./types.ts";
 
 const IDB_KEY_NAME = "meshtastic-nodedb-store";
 const CURRENT_STORE_VERSION = 0;
@@ -18,6 +26,7 @@ type NodeDBData = {
   myNodeNum: number | undefined;
   nodeMap: Map<number, Protobuf.Mesh.NodeInfo>;
   nodeErrors: Map<number, NodeError>;
+  nodePacketMetadata: Map<number, NodePacketMetadata>;
 };
 
 export interface NodeDB extends NodeDBData {
@@ -43,6 +52,7 @@ export interface NodeDB extends NodeDBData {
     includeSelf?: boolean,
   ) => Protobuf.Mesh.NodeInfo[];
   getMyNode: () => Protobuf.Mesh.NodeInfo | undefined;
+  getNodePacketMetadata: (nodeNum: number) => NodePacketMetadataView | undefined;
 
   getNodeError: (nodeNum: number) => NodeError | undefined;
   hasNodeError: (nodeNum: number) => boolean;
@@ -63,6 +73,83 @@ type NodeDBPersisted = {
   nodeDBs: Map<number, NodeDBData>;
 };
 
+function nodeDisplayName(node: Protobuf.Mesh.NodeInfo): string {
+  return node.user?.longName || node.user?.shortName || `!${node.num.toString(16).toUpperCase()}`;
+}
+
+function isDirectNeighbor(nodeDB: NodeDB, nodeNum: number): boolean {
+  const metadata = nodeDB.nodePacketMetadata.get(nodeNum);
+  if (metadata) {
+    return metadata.hopsAway === 0 && !metadata.viaMqtt;
+  }
+  const node = nodeDB.nodeMap.get(nodeNum);
+  return node?.hopsAway === 0 && node.viaMqtt === false;
+}
+
+function resolveRelayNode(nodeDB: NodeDB, nodeNum: number): RelayResolution {
+  const metadata = nodeDB.nodePacketMetadata.get(nodeNum);
+  if (!metadata || metadata.viaMqtt || metadata.hopsAway === 0) {
+    return { status: "none" };
+  }
+
+  const relayNode = metadata.relayNode & 0xff;
+  const matches = Array.from(nodeDB.nodeMap.values()).filter(
+    (node) => node.num !== nodeNum && (node.num & 0xff) === relayNode,
+  );
+
+  if (matches.length === 0) {
+    return { status: "unknown", relayNode };
+  }
+
+  const directMatches = matches.filter((node) => isDirectNeighbor(nodeDB, node.num));
+  if (directMatches.length === 1) {
+    const node = directMatches[0];
+    if (!node) {
+      return { status: "unknown", relayNode };
+    }
+    return {
+      status: "resolved",
+      nodeNum: node.num,
+      nodeName: nodeDisplayName(node),
+    };
+  }
+
+  if (directMatches.length > 1 || matches.length > 1) {
+    return { status: "ambiguous", relayNode };
+  }
+
+  const node = matches[0];
+  if (!node) {
+    return { status: "unknown", relayNode };
+  }
+  return {
+    status: "resolved",
+    nodeNum: node.num,
+    nodeName: nodeDisplayName(node),
+  };
+}
+
+function packetStateFor(
+  data: ProcessPacketParams,
+  myNodeNum: number | undefined,
+): NodePacketMetadata["packetState"] {
+  if (
+    data.hopLimit === 0 &&
+    myNodeNum !== undefined &&
+    data.to !== myNodeNum &&
+    data.to !== Constants.broadcastNum
+  ) {
+    return "deadTransit";
+  }
+  if (data.payloadVariant === "encrypted") {
+    return "encrypted";
+  }
+  if (data.payloadVariant === "decoded") {
+    return "decoded";
+  }
+  return "unknown";
+}
+
 function nodeDBFactory(
   id: number,
   get: () => PrivateNodeDBState,
@@ -71,6 +158,7 @@ function nodeDBFactory(
 ): NodeDB {
   const nodeMap = data?.nodeMap ?? new Map<number, Protobuf.Mesh.NodeInfo>();
   const nodeErrors = data?.nodeErrors ?? new Map<number, NodeError>();
+  const nodePacketMetadata = data?.nodePacketMetadata ?? new Map<number, NodePacketMetadata>();
   const myNodeNum = data?.myNodeNum;
 
   return {
@@ -78,6 +166,7 @@ function nodeDBFactory(
     myNodeNum,
     nodeMap,
     nodeErrors,
+    nodePacketMetadata,
 
     addNode: (node) =>
       set(
@@ -142,6 +231,9 @@ function nodeDBFactory(
           const updated = new Map(nodeDB.nodeMap);
           updated.delete(nodeNum);
           nodeDB.nodeMap = updated;
+          const updatedMetadata = new Map(nodeDB.nodePacketMetadata);
+          updatedMetadata.delete(nodeNum);
+          nodeDB.nodePacketMetadata = updatedMetadata;
         }),
       ),
 
@@ -164,6 +256,11 @@ function nodeDBFactory(
             );
           }
           nodeDB.nodeMap = newNodeMap;
+          nodeDB.nodePacketMetadata = new Map(
+            Array.from(nodeDB.nodePacketMetadata.entries()).filter(([nodeNum]) =>
+              newNodeMap.has(nodeNum),
+            ),
+          );
         }),
       ),
 
@@ -201,6 +298,11 @@ function nodeDBFactory(
           }
 
           nodeDB.nodeMap = newNodeMap;
+          nodeDB.nodePacketMetadata = new Map(
+            Array.from(nodeDB.nodePacketMetadata.entries()).filter(([nodeNum]) =>
+              newNodeMap.has(nodeNum),
+            ),
+          );
         }),
       );
 
@@ -260,23 +362,52 @@ function nodeDBFactory(
           }
           const node = nodeDB.nodeMap.get(data.from);
           const nowSec = Math.floor(Date.now() / 1000); // lastHeard is in seconds(!)
+          const heardAt = data.time > 0 ? data.time : nowSec;
+          const isDirectSignal = data.hopsAway === 0 && data.viaMqtt === false;
+          const existingMetadata = nodeDB.nodePacketMetadata.get(data.from);
+
+          const nextMetadata: NodePacketMetadata = {
+            ...existingMetadata,
+            portnum: data.portnum,
+            packetState: packetStateFor(data, nodeDB.myNodeNum),
+            to: data.to,
+            hopsAway: data.hopsAway,
+            viaMqtt: data.viaMqtt,
+            hopStart: data.hopStart,
+            hopLimit: data.hopLimit,
+            relayNode: data.relayNode & 0xff,
+            transportMechanism: data.transportMechanism,
+            ...(isDirectSignal
+              ? {
+                  lastDirectHeard: heardAt,
+                  directSnr: data.snr,
+                  directRssi: data.rssi,
+                }
+              : {}),
+          };
+          nodeDB.nodePacketMetadata = new Map(nodeDB.nodePacketMetadata).set(
+            data.from,
+            nextMetadata,
+          );
 
           if (node) {
             const updated = {
               ...node,
-              lastHeard: data.time > 0 ? data.time : nowSec,
-              snr: data.snr,
+              lastHeard: heardAt,
+              hopsAway: data.hopsAway,
+              viaMqtt: data.viaMqtt,
+              ...(isDirectSignal ? { snr: data.snr } : {}),
             };
             nodeDB.nodeMap = new Map(nodeDB.nodeMap).set(data.from, updated);
           } else {
-            nodeDB.nodeMap = new Map(nodeDB.nodeMap).set(
-              data.from,
-              create(Protobuf.Mesh.NodeInfoSchema, {
-                num: data.from,
-                lastHeard: data.time > 0 ? data.time : nowSec, // fallback to now if time is 0 or negative,
-                snr: data.snr,
-              }),
-            );
+            const newNode = create(Protobuf.Mesh.NodeInfoSchema, {
+              num: data.from,
+              lastHeard: heardAt, // fallback to now if time is 0 or negative,
+              hopsAway: data.hopsAway,
+              viaMqtt: data.viaMqtt,
+              ...(isDirectSignal ? { snr: data.snr } : {}),
+            });
+            nodeDB.nodeMap = new Map(nodeDB.nodeMap).set(data.from, newNode);
           }
         }),
       ),
@@ -377,6 +508,10 @@ function nodeDBFactory(
               // finalize: move maps into newDB and drop oldDB entry
               newDB.nodeMap = mergedNodes;
               newDB.nodeErrors = mergedErrors;
+              newDB.nodePacketMetadata = new Map([
+                ...oldDB.nodePacketMetadata,
+                ...newDB.nodePacketMetadata,
+              ]);
               draft.nodeDBs.delete(oldDB.id);
             }
           }
@@ -457,6 +592,25 @@ function nodeDBFactory(
       }
     },
 
+    getNodePacketMetadata: (nodeNum) => {
+      const nodeDB = get().nodeDBs.get(id);
+      if (!nodeDB) {
+        throw new Error(`No nodeDB found (id: ${id})`);
+      }
+      const metadata = nodeDB.nodePacketMetadata.get(nodeNum);
+      if (!metadata) {
+        return undefined;
+      }
+      return {
+        ...metadata,
+        directSignalStale:
+          metadata.lastDirectHeard === undefined
+            ? false
+            : Date.now() - metadata.lastDirectHeard * 1000 > DIRECT_SIGNAL_STALE_AFTER_MS,
+        relay: resolveRelayNode(nodeDB, nodeNum),
+      };
+    },
+
     getNodeError: (nodeNum) => {
       const nodeDB = get().nodeDBs.get(id);
       if (!nodeDB) {
@@ -524,6 +678,7 @@ const persistOptions: PersistOptions<PrivateNodeDBState, NodeDBPersisted> = {
           myNodeNum: db.myNodeNum,
           nodeMap: db.nodeMap,
           nodeErrors: db.nodeErrors,
+          nodePacketMetadata: db.nodePacketMetadata,
         },
       ]),
     ),

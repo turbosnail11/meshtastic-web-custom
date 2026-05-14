@@ -6,13 +6,20 @@ import { type PersistOptions, persist, subscribeWithSelector } from "zustand/mid
 import type { RasterSource } from "./types.ts";
 
 const IDB_KEY_NAME = "meshtastic-app-store";
-const CURRENT_STORE_VERSION = 1;
+const CURRENT_STORE_VERSION = 2;
 
 type AppData = {
   // Persisted data
   rasterSources: RasterSource[];
   simpleMode: boolean;
+  showAdvancedInfo: boolean;
 };
+
+export interface PendingReply {
+  messageId: number;
+  senderName: string;
+  preview: string;
+}
 
 export interface AppState extends AppData {
   // Ephemeral state (not persisted)
@@ -21,6 +28,7 @@ export interface AppState extends AppData {
   connectDialogOpen: boolean;
   nodeNumDetails: number;
   commandPaletteOpen: boolean;
+  pendingReply: PendingReply | null;
 
   setRasterSources: (sources: RasterSource[]) => void;
   addRasterSource: (source: RasterSource) => void;
@@ -31,16 +39,20 @@ export interface AppState extends AppData {
   setConnectDialogOpen: (open: boolean) => void;
   setNodeNumDetails: (nodeNum: number) => void;
   setSimpleMode: (value: boolean) => void;
+  setShowAdvancedInfo: (value: boolean) => void;
+  setPendingReply: (reply: PendingReply | null) => void;
 }
 
 export const deviceStoreInitializer: StateCreator<AppState> = (set, _get) => ({
   selectedDeviceId: 0,
   rasterSources: [],
   simpleMode: true,
+  showAdvancedInfo: false,
   commandPaletteOpen: false,
   connectDialogOpen: false,
   nodeNumToBeRemoved: 0,
   nodeNumDetails: 0,
+  pendingReply: null,
 
   setRasterSources: (sources: RasterSource[]) => {
     set(
@@ -96,6 +108,17 @@ export const deviceStoreInitializer: StateCreator<AppState> = (set, _get) => ({
       }),
     );
   },
+  setShowAdvancedInfo: (value: boolean) => {
+    set(
+      produce<AppState>((draft) => {
+        draft.showAdvancedInfo = value;
+      }),
+    );
+  },
+  setPendingReply: (reply) =>
+    set(() => ({
+      pendingReply: reply,
+    })),
 });
 
 const persistOptions: PersistOptions<AppState, AppData> = {
@@ -105,6 +128,7 @@ const persistOptions: PersistOptions<AppState, AppData> = {
   partialize: (s): AppData => ({
     rasterSources: s.rasterSources,
     simpleMode: s.simpleMode,
+    showAdvancedInfo: s.showAdvancedInfo,
   }),
   onRehydrateStorage: () => (state) => {
     if (!state) {

@@ -1,10 +1,12 @@
 import { render, screen, fireEvent } from "@testing-library/react";
+import { Protobuf } from "@meshtastic/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let simpleMode = true;
 
 const mockTraceRoute = vi.fn().mockResolvedValue(0);
 const mockRequestPosition = vi.fn().mockResolvedValue(0);
+const mockSendPacket = vi.fn().mockResolvedValue(0);
 const mockRemoveNodeByNum = vi.fn().mockResolvedValue(0);
 const mockNavigate = vi.fn();
 const mockToast = vi.fn();
@@ -21,6 +23,7 @@ vi.mock("@core/stores", () => ({
     connection: {
       traceRoute: mockTraceRoute,
       requestPosition: mockRequestPosition,
+      sendPacket: mockSendPacket,
       removeNodeByNum: mockRemoveNodeByNum,
     },
   }),
@@ -80,6 +83,27 @@ describe("NodeContextMenu", () => {
     expect(screen.getByText("Test Node")).toBeInTheDocument();
   });
 
+  it("uses a friendly fallback label when the long name is just the node ID", () => {
+    const nodeWithoutPkiName = {
+      ...fakeNode,
+      user: {
+        longName: "!abcd1234",
+        shortName: "TST",
+        publicKey: new Uint8Array(),
+      },
+    } as never;
+
+    render(
+      <NodeContextMenu node={nodeWithoutPkiName}>
+        <button type="button" data-testid="trigger">
+          target
+        </button>
+      </NodeContextMenu>,
+    );
+    openMenu();
+    expect(screen.getByText("Meshtastic TST")).toBeInTheDocument();
+  });
+
   it("shows simple-mode actions and hides advanced-only actions when simpleMode is true", () => {
     render(
       <NodeContextMenu node={fakeNode}>
@@ -90,8 +114,9 @@ describe("NodeContextMenu", () => {
     );
     openMenu();
     expect(screen.getByTestId("action-send-message")).toBeInTheDocument();
-    expect(screen.getByTestId("action-traceroute")).toBeInTheDocument();
+    expect(screen.getByTestId("action-request-node-info")).toBeInTheDocument();
     expect(screen.getByTestId("action-request-position")).toBeInTheDocument();
+    expect(screen.getByTestId("action-traceroute")).toBeInTheDocument();
     expect(screen.getByTestId("action-favorite")).toBeInTheDocument();
     expect(screen.getByTestId("action-copy-id")).toBeInTheDocument();
     expect(screen.getByTestId("action-show-on-map")).toBeInTheDocument();
@@ -124,6 +149,45 @@ describe("NodeContextMenu", () => {
     openMenu();
     fireEvent.click(screen.getByTestId("action-traceroute"));
     expect(mockTraceRoute).toHaveBeenCalledWith(0xabcd1234);
+  });
+
+  it("dispatches Request Node Info on click", () => {
+    render(
+      <NodeContextMenu node={fakeNode}>
+        <button type="button" data-testid="trigger">
+          target
+        </button>
+      </NodeContextMenu>,
+    );
+    openMenu();
+    fireEvent.click(screen.getByTestId("action-request-node-info"));
+    expect(mockSendPacket).toHaveBeenCalledWith(
+      new Uint8Array(),
+      Protobuf.Portnums.PortNum.NODEINFO_APP,
+      0xabcd1234,
+    );
+  });
+
+  it("orders destination actions with node info after send message and trace route after position", () => {
+    render(
+      <NodeContextMenu node={fakeNode}>
+        <button type="button" data-testid="trigger">
+          target
+        </button>
+      </NodeContextMenu>,
+    );
+    openMenu();
+
+    const actionIds = screen
+      .getAllByRole("menuitem")
+      .map((item) => item.getAttribute("data-testid"));
+
+    expect(actionIds.slice(0, 4)).toEqual([
+      "action-send-message",
+      "action-request-node-info",
+      "action-request-position",
+      "action-traceroute",
+    ]);
   });
 
   it("dispatches Request Position on click", () => {
@@ -194,6 +258,7 @@ describe("NodeContextMenu", () => {
     );
     openMenu();
     expect(screen.queryByTestId("action-send-message")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("action-request-node-info")).not.toBeInTheDocument();
     expect(screen.queryByTestId("action-traceroute")).not.toBeInTheDocument();
     expect(screen.queryByTestId("action-request-position")).not.toBeInTheDocument();
     // Local-only actions still shown

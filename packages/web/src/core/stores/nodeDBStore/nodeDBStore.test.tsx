@@ -54,6 +54,24 @@ function makeUser(fields: Record<string, any>) {
 function makePosition(fields: Record<string, any>) {
   return create(Protobuf.Mesh.PositionSchema, fields);
 }
+function makePacket(fields: Record<string, any>) {
+  return {
+    from: 50,
+    time: 1111,
+    snr: 7,
+    rssi: -90,
+    portnum: Protobuf.Portnums.PortNum.NODEINFO_APP,
+    payloadVariant: "decoded",
+    to: 0xffffffff,
+    hopsAway: 0,
+    viaMqtt: false,
+    hopStart: 3,
+    hopLimit: 3,
+    relayNode: 0,
+    transportMechanism: Protobuf.Mesh.MeshPacket_TransportMechanism.TRANSPORT_LORA,
+    ...fields,
+  };
+}
 
 describe("NodeDB store", () => {
   beforeEach(() => {
@@ -95,18 +113,212 @@ describe("NodeDB store", () => {
     const { useNodeDBStore } = await freshStore();
     const db = useNodeDBStore.getState().addNodeDB(1);
 
-    db.processPacket({ from: 50, time: 1111, snr: 7 } as any);
+    db.processPacket(makePacket({ from: 50, time: 1111, snr: 7 }));
     expect(db.getNode(50)).toBeTruthy();
     expect(db.getNode(50)?.lastHeard).toBe(1111);
     expect(db.getNode(50)?.snr).toBe(7);
 
-    db.processPacket({ from: 50, time: 2222, snr: 9 } as any);
+    db.processPacket(makePacket({ from: 50, time: 2222, snr: 9 }));
     expect(db.getNode(50)?.lastHeard).toBe(2222);
     expect(db.getNode(50)?.snr).toBe(9);
 
-    db.processPacket({ from: 50, time: 0, snr: 9 } as any);
+    db.processPacket(makePacket({ from: 50, time: 0, snr: 9 }));
     expect(db.getNode(50)?.lastHeard).toBeCloseTo(Date.now() / 1000, -1); // within 1s, note lastHeard is in seconds
     expect(db.getNode(50)?.snr).toBe(9);
+  });
+
+  it("processPacket records direct signal and latest packet metadata", async () => {
+    const { useNodeDBStore } = await freshStore();
+    const db = useNodeDBStore.getState().addNodeDB(1);
+
+    db.processPacket(
+      makePacket({
+        from: 51,
+        time: 1234,
+        snr: 4.5,
+        rssi: -91,
+        portnum: Protobuf.Portnums.PortNum.TELEMETRY_APP,
+      }),
+    );
+
+    expect(db.getNode(51)?.lastHeard).toBe(1234);
+    expect(db.getNode(51)?.snr).toBe(4.5);
+    expect(db.getNodePacketMetadata(51)).toMatchObject({
+      portnum: Protobuf.Portnums.PortNum.TELEMETRY_APP,
+      hopsAway: 0,
+      viaMqtt: false,
+      lastDirectHeard: 1234,
+      directSnr: 4.5,
+      directRssi: -91,
+      directSignalStale: true,
+      relay: { status: "none" },
+    });
+  });
+
+  it("relayed packets update lastHeard and portnum without overwriting direct signal", async () => {
+    const { useNodeDBStore } = await freshStore();
+    const db = useNodeDBStore.getState().addNodeDB(1);
+
+    db.processPacket(makePacket({ from: 52, time: 1000, snr: 8, rssi: -80 }));
+    db.processPacket(
+      makePacket({
+        from: 52,
+        time: 2000,
+        snr: -3,
+        rssi: -110,
+        portnum: Protobuf.Portnums.PortNum.POSITION_APP,
+        hopsAway: 2,
+        hopStart: 4,
+        hopLimit: 2,
+        relayNode: 0xab,
+      }),
+    );
+
+    expect(db.getNode(52)?.lastHeard).toBe(2000);
+    expect(db.getNode(52)?.snr).toBe(8);
+    expect(db.getNodePacketMetadata(52)).toMatchObject({
+      portnum: Protobuf.Portnums.PortNum.POSITION_APP,
+      hopsAway: 2,
+      relayNode: 0xab,
+      lastDirectHeard: 1000,
+      directSnr: 8,
+      directRssi: -80,
+    });
+  });
+
+  it("MQTT packets do not overwrite direct signal", async () => {
+    const { useNodeDBStore } = await freshStore();
+    const db = useNodeDBStore.getState().addNodeDB(1);
+
+    db.processPacket(makePacket({ from: 53, time: 1000, snr: 6, rssi: -82 }));
+    db.processPacket(
+      makePacket({
+        from: 53,
+        time: 3000,
+        snr: -9,
+        rssi: -120,
+        viaMqtt: true,
+        transportMechanism: Protobuf.Mesh.MeshPacket_TransportMechanism.TRANSPORT_MQTT,
+      }),
+    );
+
+    expect(db.getNode(53)?.lastHeard).toBe(3000);
+    expect(db.getNode(53)?.snr).toBe(6);
+    expect(db.getNodePacketMetadata(53)).toMatchObject({
+      viaMqtt: true,
+      lastDirectHeard: 1000,
+      directSnr: 6,
+      directRssi: -82,
+      relay: { status: "none" },
+    });
+  });
+
+  it("marks direct signal stale after 6 hours", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-14T00:00:00Z"));
+    const { useNodeDBStore } = await freshStore();
+    const db = useNodeDBStore.getState().addNodeDB(1);
+
+    db.processPacket(makePacket({ from: 54, time: Date.now() / 1000, snr: 3 }));
+    expect(db.getNodePacketMetadata(54)?.directSignalStale).toBe(false);
+
+    vi.setSystemTime(new Date("2026-05-14T06:00:01Z"));
+    expect(db.getNodePacketMetadata(54)?.directSignalStale).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it("classifies encrypted and dead transit packet states", async () => {
+    const { useNodeDBStore } = await freshStore();
+    const db = useNodeDBStore.getState().addNodeDB(1);
+    db.setNodeNum(0x10000000);
+
+    db.processPacket(
+      makePacket({
+        from: 55,
+        to: 0xffffffff,
+        payloadVariant: "encrypted",
+        portnum: undefined,
+      }),
+    );
+    expect(db.getNodePacketMetadata(55)?.packetState).toBe("encrypted");
+
+    db.processPacket(
+      makePacket({
+        from: 56,
+        to: 0x20000000,
+        payloadVariant: "encrypted",
+        portnum: undefined,
+        hopStart: 3,
+        hopLimit: 0,
+        hopsAway: 3,
+      }),
+    );
+    expect(db.getNodePacketMetadata(56)?.packetState).toBe("deadTransit");
+
+    db.processPacket(
+      makePacket({
+        from: 57,
+        to: 0x10000000,
+        payloadVariant: "encrypted",
+        portnum: undefined,
+        hopStart: 3,
+        hopLimit: 0,
+        hopsAway: 3,
+      }),
+    );
+    expect(db.getNodePacketMetadata(57)?.packetState).toBe("encrypted");
+  });
+
+  it("resolves relay low-byte matches with unique, unknown, and ambiguous fallbacks", async () => {
+    const { useNodeDBStore } = await freshStore();
+    const db = useNodeDBStore.getState().addNodeDB(1);
+
+    db.addNode(makeNode(0x100000ab, { user: makeUser({ longName: "Direct Relay" }) }));
+    db.processPacket(makePacket({ from: 0x100000ab, hopsAway: 0 }));
+    db.processPacket(
+      makePacket({
+        from: 60,
+        hopsAway: 2,
+        hopStart: 4,
+        hopLimit: 2,
+        relayNode: 0xab,
+      }),
+    );
+    expect(db.getNodePacketMetadata(60)?.relay).toMatchObject({
+      status: "resolved",
+      nodeNum: 0x100000ab,
+      nodeName: "Direct Relay",
+    });
+
+    db.processPacket(
+      makePacket({
+        from: 61,
+        hopsAway: 1,
+        hopStart: 4,
+        hopLimit: 3,
+        relayNode: 0xcd,
+      }),
+    );
+    expect(db.getNodePacketMetadata(61)?.relay).toEqual({
+      status: "unknown",
+      relayNode: 0xcd,
+    });
+
+    db.addNode(makeNode(0x100000ef, { user: makeUser({ longName: "Relay A" }) }));
+    db.addNode(makeNode(0x200000ef, { user: makeUser({ longName: "Relay B" }) }));
+    db.processPacket(
+      makePacket({
+        from: 62,
+        hopsAway: 1,
+        hopStart: 4,
+        hopLimit: 3,
+        relayNode: 0xef,
+      }),
+    );
+    expect(db.getNodePacketMetadata(62)?.relay).toEqual({
+      status: "ambiguous",
+      relayNode: 0xef,
+    });
   });
 
   it("addUser and addPosition updates existing or creates new nodes", async () => {
