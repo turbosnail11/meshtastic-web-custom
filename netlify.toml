@@ -1,0 +1,4 @@
+[build]
+  base    = "packages/web"
+  command = "pnpm build"
+  publish = "dist"
