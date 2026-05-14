@@ -1,4 +1,5 @@
 import { messagesWithParamsRoute } from "@app/routes.tsx";
+import { NodeContextMenu } from "@components/NodeContextMenu.tsx";
 import { ChannelChat } from "@components/PageComponents/Messages/ChannelChat.tsx";
 import { MessageInput } from "@components/PageComponents/Messages/MessageInput.tsx";
 import { PageLayout } from "@components/PageLayout.tsx";
@@ -238,25 +239,26 @@ export const MessagesPage = () => {
         style={{ contentVisibility: "auto", containIntrinsicSize: "100px" }}
       >
         {filteredNodes()?.map((node) => (
-          <SidebarButton
-            key={node.num}
-            preventCollapse
-            label={node.user?.longName ?? t("unknown.shortName")}
-            count={node.unreadCount > 0 ? node.unreadCount : undefined}
-            active={numericChatId === node.num && chatType === MessageType.Direct}
-            onClick={() => {
-              navigateToChat(MessageType.Direct, node.num.toString());
-              resetUnread(node.num);
-            }}
-          >
-            <Avatar
-              nodeNum={node.num}
-              className={cn(hasNodeError(node.num) && "text-red-500")}
-              showError={hasNodeError(node.num)}
-              showFavorite={node.isFavorite}
-              size="sm"
-            />
-          </SidebarButton>
+          <NodeContextMenu key={node.num} node={node}>
+            <SidebarButton
+              preventCollapse
+              label={node.user?.longName ?? t("unknown.shortName")}
+              count={node.unreadCount > 0 ? node.unreadCount : undefined}
+              active={numericChatId === node.num && chatType === MessageType.Direct}
+              onClick={() => {
+                navigateToChat(MessageType.Direct, node.num.toString());
+                resetUnread(node.num);
+              }}
+            >
+              <Avatar
+                nodeNum={node.num}
+                className={cn(hasNodeError(node.num) && "text-red-500")}
+                showError={hasNodeError(node.num)}
+                showFavorite={node.isFavorite}
+                size="sm"
+              />
+            </SidebarButton>
+          </NodeContextMenu>
         ))}
       </div>
     </SidebarSection>

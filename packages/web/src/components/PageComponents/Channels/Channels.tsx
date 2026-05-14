@@ -2,6 +2,7 @@ import { Channel } from "@app/components/PageComponents/Channels/Channel";
 import { Button } from "@components/UI/Button.tsx";
 import { Spinner } from "@components/UI/Spinner.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@components/UI/Tabs.tsx";
+import { useSimpleMode } from "@core/hooks/useSimpleMode.ts";
 import { useDevice } from "@core/stores";
 import type { Protobuf } from "@meshtastic/core";
 import i18next from "i18next";
@@ -28,17 +29,24 @@ export const getChannelName = (channel: Protobuf.Channel.Channel) => {
 export const Channels = ({ onFormInit }: ConfigProps) => {
   const { channels, hasChannelChange, setDialogOpen } = useDevice();
   const { t } = useTranslation("channels");
+  const simpleMode = useSimpleMode();
 
   const allChannels = Array.from(channels.values());
+  // In simple mode hide the primary channel tab (index 0). It is still used
+  // for messaging elsewhere, but should not be edited directly by users.
+  const visibleChannels = simpleMode
+    ? allChannels.filter((channel) => channel.index !== 0)
+    : allChannels;
   const flags = useMemo(
     () => new Map(allChannels.map((channel) => [channel.index, hasChannelChange(channel.index)])),
     [allChannels, hasChannelChange],
   );
+  const defaultTab = simpleMode ? `channel_${visibleChannels[0]?.index ?? 1}` : "channel_0";
 
   return (
-    <Tabs defaultValue="channel_0">
+    <Tabs defaultValue={defaultTab}>
       <TabsList className="w-full dark:bg-slate-700">
-        {allChannels.map((channel) => (
+        {visibleChannels.map((channel) => (
           <TabsTrigger
             key={`channel_${channel.index}`}
             value={`channel_${channel.index}`}
@@ -62,7 +70,7 @@ export const Channels = ({ onFormInit }: ConfigProps) => {
           {t("page.export")}
         </Button>
       </TabsList>
-      {allChannels.map((channel) => (
+      {visibleChannels.map((channel) => (
         <TabsContent key={`channel_${channel.index}`} value={`channel_${channel.index}`}>
           <Suspense fallback={<Spinner size="lg" className="my-5" />}>
             <Channel key={channel.index} onFormInit={onFormInit} channel={channel} />

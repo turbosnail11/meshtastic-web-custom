@@ -7,6 +7,7 @@ import { Power } from "@components/PageComponents/Settings/Power.tsx";
 import { User } from "@components/PageComponents/Settings/User.tsx";
 import { Spinner } from "@components/UI/Spinner.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@components/UI/Tabs.tsx";
+import { useSimpleMode } from "@core/hooks/useSimpleMode.ts";
 import { useDevice, type ValidConfigType } from "@core/stores";
 import { type ComponentType, Suspense, useMemo } from "react";
 import type { UseFormReturn } from "react-hook-form";
@@ -21,11 +22,13 @@ type TabItem = {
   label: string;
   element: ComponentType<ConfigProps>;
   count?: number;
+  visibility?: "advanced";
 };
 
 export const DeviceConfig = ({ onFormInit }: ConfigProps) => {
   const { hasConfigChange, hasUserChange } = useDevice();
   const { t } = useTranslation("config");
+  const simpleMode = useSimpleMode();
   const tabs: TabItem[] = useMemo(
     () => [
       {
@@ -37,6 +40,7 @@ export const DeviceConfig = ({ onFormInit }: ConfigProps) => {
         case: "device",
         label: t("page.tabDevice"),
         element: Device,
+        visibility: "advanced",
       },
       {
         case: "position",
@@ -47,41 +51,50 @@ export const DeviceConfig = ({ onFormInit }: ConfigProps) => {
         case: "power",
         label: t("page.tabPower"),
         element: Power,
+        visibility: "advanced",
       },
       {
         case: "network",
         label: t("page.tabNetwork"),
         element: Network,
+        visibility: "advanced",
       },
       {
         case: "display",
         label: t("page.tabDisplay"),
         element: Display,
+        visibility: "advanced",
       },
       {
         case: "bluetooth",
         label: t("page.tabBluetooth"),
         element: Bluetooth,
+        visibility: "advanced",
       },
     ],
     [t],
   );
 
+  const visibleTabs = useMemo(
+    () => tabs.filter((tab) => !(simpleMode && tab.visibility === "advanced")),
+    [tabs, simpleMode],
+  );
+
   const flags = useMemo(
     () =>
       new Map(
-        tabs.map((tab) => [
+        visibleTabs.map((tab) => [
           tab.case,
           tab.case === "user" ? hasUserChange() : hasConfigChange(tab.case as ValidConfigType),
         ]),
       ),
-    [tabs, hasConfigChange, hasUserChange],
+    [visibleTabs, hasConfigChange, hasUserChange],
   );
 
   return (
     <Tabs defaultValue={t("page.tabUser")}>
       <TabsList className="w-full dark:bg-slate-700">
-        {tabs.map((tab) => (
+        {visibleTabs.map((tab) => (
           <TabsTrigger key={tab.label} value={tab.label} className="dark:text-white relative">
             {tab.label}
             {flags.get(tab.case) && (
@@ -93,7 +106,7 @@ export const DeviceConfig = ({ onFormInit }: ConfigProps) => {
           </TabsTrigger>
         ))}
       </TabsList>
-      {tabs.map((tab) => (
+      {visibleTabs.map((tab) => (
         <TabsContent key={tab.label} value={tab.label}>
           <Suspense fallback={<Spinner size="lg" className="my-5" />}>
             <tab.element onFormInit={onFormInit} />

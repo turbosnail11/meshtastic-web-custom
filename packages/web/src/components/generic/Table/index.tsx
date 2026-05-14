@@ -16,6 +16,11 @@ export interface DataRow {
   id: string | number;
   isFavorite?: boolean;
   cells: Cell[];
+  /**
+   * Optional wrapper that receives the row's <tr>.
+   * Used by callers to add a context-menu (e.g. NodeContextMenu).
+   */
+  rowWrapper?: (tr: React.ReactElement) => React.ReactElement;
 }
 
 export interface TableProps {
@@ -128,36 +133,43 @@ export const Table = ({ headings, rows }: TableProps) => {
         </tr>
       </thead>
       <tbody className="max-w-fit">
-        {sortedRows.map((row) => (
-          <tr
-            key={row.id}
-            className={cn(
-              row.isFavorite
-                ? "bg-yellow-100/30 dark:bg-slate-800 odd:bg-yellow-200/30 dark:odd:bg-slate-600/40"
-                : "bg-white dark:bg-slate-900 odd:bg-slate-200/40 dark:odd:bg-slate-800/40",
-            )}
-          >
-            {row.cells.map((cell, cellIndex) => {
-              const key = `${row.id}_${cellIndex}`;
-              const isFirstCell = cellIndex === 0;
+        {sortedRows.map((row) => {
+          const tr = (
+            <tr
+              key={row.id}
+              className={cn(
+                row.isFavorite
+                  ? "bg-yellow-100/30 dark:bg-slate-800 odd:bg-yellow-200/30 dark:odd:bg-slate-600/40"
+                  : "bg-white dark:bg-slate-900 odd:bg-slate-200/40 dark:odd:bg-slate-800/40",
+              )}
+            >
+              {row.cells.map((cell, cellIndex) => {
+                const key = `${row.id}_${cellIndex}`;
+                const isFirstCell = cellIndex === 0;
 
-              const cellElement = isFirstCell ? (
-                <th
-                  className="whitespace-nowrap px-3 py-2 text-sm text-left text-text-secondary"
-                  scope="row"
-                >
-                  {cell.content}
-                </th>
-              ) : (
-                <td className="whitespace-nowrap px-3 py-2 text-sm text-text-secondary">
-                  {cell.content}
-                </td>
-              );
+                const cellElement = isFirstCell ? (
+                  <th
+                    className="whitespace-nowrap px-3 py-2 text-sm text-left text-text-secondary"
+                    scope="row"
+                  >
+                    {cell.content}
+                  </th>
+                ) : (
+                  <td className="whitespace-nowrap px-3 py-2 text-sm text-text-secondary">
+                    {cell.content}
+                  </td>
+                );
 
-              return React.cloneElement(cellElement, { key });
-            })}
-          </tr>
-        ))}
+                return React.cloneElement(cellElement, { key });
+              })}
+            </tr>
+          );
+          return row.rowWrapper ? (
+            <React.Fragment key={row.id}>{row.rowWrapper(tr)}</React.Fragment>
+          ) : (
+            tr
+          );
+        })}
       </tbody>
     </table>
   );

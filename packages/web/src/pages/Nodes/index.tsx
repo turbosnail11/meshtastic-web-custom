@@ -5,20 +5,28 @@ import { type FilterState, useFilterNode } from "@components/generic/Filter/useF
 import { Mono } from "@components/generic/Mono.tsx";
 import { type DataRow, type Heading, Table } from "@components/generic/Table/index.tsx";
 import { TimeAgo } from "@components/generic/TimeAgo.tsx";
+import { NodeContextMenu } from "@components/NodeContextMenu.tsx";
 import { PageLayout } from "@components/PageLayout.tsx";
 import { Sidebar } from "@components/Sidebar.tsx";
+import { SonarHistoryModal } from "@components/SonarHistoryModal.tsx";
+import { SonarModal } from "@components/SonarModal.tsx";
 import { Avatar } from "@components/UI/Avatar.tsx";
 import { Input } from "@components/UI/Input.tsx";
+import { RadarIcon } from "@components/UI/RadarIcon.tsx";
 import useLang from "@core/hooks/useLang.ts";
+import { useSonar } from "@core/hooks/useSonar.ts";
 import { useAppStore, useDevice, useNodeDB } from "@core/stores";
+import { type SonarRun, useSonarStore } from "@core/stores/sonarStore/index.ts";
 import { Protobuf, type Types } from "@meshtastic/core";
 import { numberToHexUnpadded } from "@noble/curves/abstract/utils";
-import { LockIcon, LockOpenIcon } from "lucide-react";
-import { type JSX, useCallback, useDeferredValue, useEffect, useState } from "react";
+import { ClockIcon, LockIcon, LockOpenIcon } from "lucide-react";
+import { type JSX, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { base16 } from "rfc4648";
 
 const NODEDB_DEBOUNCE_MS = 250;
+// Stable reference so the sonar runs selector doesn't churn on every render.
+const EMPTY_RUNS: SonarRun[] = [];
 
 export interface DeleteNoteDialogProps {
   open: boolean;
@@ -28,10 +36,66 @@ export interface DeleteNoteDialogProps {
 const NodesPage = (): JSX.Element => {
   const { t } = useTranslation("nodes");
   const { current } = useLang();
-  const { hardware, connection, setDialogOpen } = useDevice();
+  const { hardware, connection, config, setDialogOpen } = useDevice();
 
   const { setNodeNumDetails } = useAppStore();
   const { nodeFilter, defaultFilterValues, isFilterDirty } = useFilterNode();
+
+  // Sonar
+  const sonar = useSonar();
+  // Subscribe to the raw runs map slice; nullable. Using `?? []` inline would
+  // create a new array on every render and cause an infinite Zustand re-render
+  // loop, so the fallback is computed once outside the selector.
+  const sonarRunsRaw = useSonarStore((s) => s.runsByDevice[hardware.myNodeNum]);
+  const sonarRuns = sonarRunsRaw ?? EMPTY_RUNS;
+  const getRun = useSonarStore((s) => s.getRun);
+  const [sonarOpen, setSonarOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [viewedRunId, setViewedRunId] = useState<string | null>(null);
+
+  // The live run shown in the modal:
+  //  1. The active sonar's current run (if a run is in progress)
+  //  2. A historical run the user opened from the history table
+  //  3. Otherwise the most recent run for this device (so a freshly-finished
+  //     run stays visible after cooldown until the user closes the modal)
+  const currentRun = useMemo(() => {
+    const activeId = sonar.status.runId ?? viewedRunId;
+    if (activeId) return getRun(hardware.myNodeNum, activeId);
+    return sonarRunsRaw?.[0];
+    // sonarRunsRaw drives memo refresh as the run updates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sonar.status.runId, viewedRunId, getRun, hardware.myNodeNum, sonarRunsRaw]);
+
+  const handleSonarClick = useCallback(() => {
+    setViewedRunId(null);
+    setSonarOpen(true);
+    sonar.start(config.lora?.modemPreset ?? 0, hardware.myNodeNum);
+  }, [sonar, config.lora?.modemPreset, hardware.myNodeNum]);
+
+  const handleOpenHistoricalRun = useCallback((runId: string) => {
+    setHistoryOpen(false);
+    setViewedRunId(runId);
+    setSonarOpen(true);
+  }, []);
+
+  // Sonar button label based on phase
+  const sonarButtonLabel = useMemo(() => {
+    const { phase, endsAt } = sonar.status;
+    if (phase === "idle") return "Sonar";
+    if (phase === "ready") return "Ready to probe";
+    if (!endsAt) return phase;
+    const remaining = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+    if (phase === "probing") return `Listening (${remaining}s)`;
+    if (phase === "enriching") return `Probing (${remaining}s)`;
+    return `Cooldown (${remaining}s)`;
+  }, [sonar.status]);
+  // Force a re-render every 250ms while sonar is active so the label countdown updates
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (sonar.status.phase === "idle") return;
+    const id = setInterval(() => setTick((n) => n + 1), 250);
+    return () => clearInterval(id);
+  }, [sonar.status.phase]);
 
   const [selectedTraceroute, setSelectedTraceroute] = useState<
     Types.PacketMetadata<Protobuf.Mesh.RouteDiscovery> | undefined
@@ -60,9 +124,11 @@ const NodesPage = (): JSX.Element => {
   );
   const handleTraceroute = useCallback(
     (traceroute: Types.PacketMetadata<Protobuf.Mesh.RouteDiscovery>) => {
+      // Suppress the dialog for traceroute responses that are sonar replies.
+      if (sonar.isSonarResponsePacket(traceroute.id)) return;
       setSelectedTraceroute(traceroute);
     },
-    [],
+    [sonar.isSonarResponsePacket],
   );
 
   const handleLocation = useCallback(
@@ -73,9 +139,11 @@ const NodesPage = (): JSX.Element => {
       ) {
         return;
       }
+      // Sonar's Phase 2 sends unicast position requests; suppress that dialog too.
+      if (sonar.isSonarResponsePacket(location.id)) return;
       setSelectedLocation(location);
     },
-    [hardware.myNodeNum],
+    [hardware.myNodeNum, sonar.isSonarResponsePacket],
   );
 
   function handleNodeInfoDialog(nodeNum: number): void {
@@ -131,6 +199,11 @@ const NodesPage = (): JSX.Element => {
     return {
       id: node.num,
       isFavorite: node.isFavorite,
+      rowWrapper: (tr) => (
+        <NodeContextMenu node={node} isSelf={node.num === hardware.myNodeNum}>
+          {tr}
+        </NodeContextMenu>
+      ),
       cells: [
         {
           content: (
@@ -144,17 +217,13 @@ const NodesPage = (): JSX.Element => {
         },
         {
           content: (
-            <h1
-              onMouseDown={() => handleNodeInfoDialog(node.num)}
-              onKeyUp={(evt) => {
-                if (evt.key === "Enter") {
-                  handleNodeInfoDialog(node.num);
-                }
-              }}
-              className="cursor-pointer underline ml-2 whitespace-break-spaces"
+            <button
+              type="button"
+              onClick={() => handleNodeInfoDialog(node.num)}
+              className="cursor-pointer underline ml-2 whitespace-break-spaces bg-transparent border-0 p-0 text-left"
             >
               {longName}
-            </h1>
+            </button>
           ),
           sortValue: longName,
         },
@@ -221,8 +290,63 @@ const NodesPage = (): JSX.Element => {
     };
   });
 
+  // Build a LucideIcon-shaped wrapper so PageLayout.actions can render the radar.
+  // It captures the current "active" state at render time, which is good enough —
+  // we tick state every 250ms while sonar is running, forcing re-renders.
+  const sonarActive = sonar.status.phase === "probing" || sonar.status.phase === "enriching";
+  // biome-ignore lint/correctness/noUnusedVariables: LucideIcon-shape wrapper
+  const SonarLucideIcon = ({ className }: { className?: string }) => (
+    <RadarIcon active={sonarActive} className={className} size={20} />
+  );
+
   return (
-    <PageLayout label="" leftBar={<Sidebar />}>
+    <PageLayout
+      label={t("page.title", { defaultValue: "Nodes" })}
+      leftBar={<Sidebar />}
+      actions={[
+        {
+          key: "sonar-history",
+          icon: ClockIcon as unknown as typeof ClockIcon,
+          ariaLabel: "Sonar history",
+          onClick: () => setHistoryOpen(true),
+          className:
+            "hover:bg-slate-200 dark:hover:bg-slate-300 dark:hover:text-black cursor-pointer",
+        },
+        {
+          key: "sonar",
+          icon: SonarLucideIcon as unknown as typeof ClockIcon,
+          onClick: handleSonarClick,
+          disabled: sonar.locked || !connection,
+          ariaLabel: "Sonar — broadcast probe to direct neighbors",
+          label: sonarButtonLabel,
+          className:
+            "border border-slate-300 dark:border-slate-600 rounded-md hover:bg-slate-200 dark:hover:bg-slate-300 dark:hover:text-black cursor-pointer disabled:cursor-not-allowed",
+        },
+      ]}
+    >
+      <SonarModal
+        open={sonarOpen}
+        onOpenChange={(o) => {
+          // If the user closes the modal while a run is in "ready" state
+          // (Phase 1 done, awaiting probe decision), end the run gracefully
+          // so the sonar button can be used again.
+          if (!o && !viewedRunId && sonar.status.phase === "ready") {
+            sonar.endRun();
+          }
+          setSonarOpen(o);
+          if (!o) setViewedRunId(null);
+        }}
+        run={currentRun}
+        phase={viewedRunId ? "idle" : sonar.status.phase}
+        endsAt={viewedRunId ? null : sonar.status.endsAt}
+        onProbe={viewedRunId ? undefined : sonar.probe}
+      />
+      <SonarHistoryModal
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        runs={sonarRuns}
+        onOpenRun={handleOpenHistoricalRun}
+      />
       <div className="pl-2 pt-2 flex flex-row">
         <div className="flex-1 mr-2">
           <Input

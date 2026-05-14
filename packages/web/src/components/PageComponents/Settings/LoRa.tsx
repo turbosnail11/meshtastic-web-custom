@@ -59,12 +59,14 @@ export const LoRa = ({ onFormInit }: LoRaConfigProps) => {
               name: "channelNum",
               label: t("lora.frequencySlot.label"),
               description: t("lora.frequencySlot.description"),
+              visibility: "advanced",
             },
             {
               type: "toggle",
               name: "ignoreMqtt",
               label: t("lora.ignoreMqtt.label"),
               description: t("lora.ignoreMqtt.description"),
+              visibility: "advanced",
             },
             {
               type: "toggle",
@@ -83,6 +85,7 @@ export const LoRa = ({ onFormInit }: LoRaConfigProps) => {
               name: "usePreset",
               label: t("lora.usePreset.label"),
               description: t("lora.usePreset.description"),
+              visibility: "advanced",
             },
             {
               type: "select",
@@ -113,6 +116,7 @@ export const LoRa = ({ onFormInit }: LoRaConfigProps) => {
               properties: {
                 suffix: t("unit.kilohertz"),
               },
+              visibility: "advanced",
             },
             {
               type: "number",
@@ -129,6 +133,7 @@ export const LoRa = ({ onFormInit }: LoRaConfigProps) => {
               properties: {
                 suffix: t("unit.cps"),
               },
+              visibility: "advanced",
             },
             {
               type: "number",
@@ -141,6 +146,7 @@ export const LoRa = ({ onFormInit }: LoRaConfigProps) => {
                   invert: true,
                 },
               ],
+              visibility: "advanced",
             },
           ],
         },
@@ -153,6 +159,7 @@ export const LoRa = ({ onFormInit }: LoRaConfigProps) => {
               name: "txEnabled",
               label: t("lora.transmitEnabled.label"),
               description: t("lora.transmitEnabled.description"),
+              visibility: "advanced",
             },
             {
               type: "number",
@@ -168,6 +175,7 @@ export const LoRa = ({ onFormInit }: LoRaConfigProps) => {
               name: "overrideDutyCycle",
               label: t("lora.overrideDutyCycle.label"),
               description: t("lora.overrideDutyCycle.description"),
+              visibility: "advanced",
             },
             {
               type: "number",
@@ -177,12 +185,14 @@ export const LoRa = ({ onFormInit }: LoRaConfigProps) => {
               properties: {
                 suffix: t("unit.hertz"),
               },
+              visibility: "advanced",
             },
             {
               type: "toggle",
               name: "sx126xRxBoostedGain",
               label: t("lora.boostedRxGain.label"),
               description: t("lora.boostedRxGain.description"),
+              visibility: "advanced",
             },
             {
               type: "number",
@@ -193,6 +203,7 @@ export const LoRa = ({ onFormInit }: LoRaConfigProps) => {
                 suffix: t("unit.megahertz"),
                 step: 0.001,
               },
+              visibility: "advanced",
             },
           ],
         },

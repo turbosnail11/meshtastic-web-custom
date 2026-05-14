@@ -4,6 +4,7 @@ import { FieldWrapper } from "@components/Form/FormWrapper.tsx";
 import { Button } from "@components/UI/Button.tsx";
 import { Heading } from "@components/UI/Typography/Heading.tsx";
 import { Subtle } from "@components/UI/Typography/Subtle.tsx";
+import { useSimpleMode } from "@core/hooks/useSimpleMode.ts";
 import { useEffect } from "react";
 import {
   type Control,
@@ -34,6 +35,12 @@ export interface BaseFormBuilderProps<T> {
   notes?: string;
   validationText?: string;
   properties?: Record<string, unknown>;
+  /**
+   * Visibility tier for this field.
+   * - "advanced" — hidden when the user's simpleMode preference is true (default).
+   * - undefined — always visible.
+   */
+  visibility?: "advanced";
 }
 
 export interface GenericFormElementProps<T extends FieldValues, Y> {
@@ -59,6 +66,11 @@ export interface DynamicFormProps<T extends FieldValues> {
     valid?: boolean;
     validationText?: string;
     fields: FieldProps<T>[];
+    /**
+     * Visibility tier for the entire group.
+     * - "advanced" — group and all its fields are hidden in simple mode.
+     */
+    visibility?: "advanced";
   }[];
   validationSchema?: ZodType<T>;
 }
@@ -77,6 +89,7 @@ export function DynamicForm<T extends FieldValues>({
   validationSchema,
 }: DynamicFormProps<T>) {
   const { t } = useTranslation();
+  const simpleMode = useSimpleMode();
 
   const internalMethods = useForm<T>({
     mode: "onChange",
@@ -128,48 +141,59 @@ export function DynamicForm<T extends FieldValues>({
           ? { onSubmit: handleSubmit(onSubmit) }
           : { onChange: handleSubmit(onSubmit) })}
       >
-        {fieldGroups.map((fieldGroup) => (
-          <div key={fieldGroup.label} className="space-y-8 sm:space-y-5">
-            <div>
-              <Heading as="h4" className="font-medium">
-                {fieldGroup.label}
-              </Heading>
-              <Subtle>{fieldGroup.description}</Subtle>
-              <Subtle className="font-semibold">{fieldGroup?.notes}</Subtle>
-            </div>
+        {fieldGroups.map((fieldGroup) => {
+          if (simpleMode && fieldGroup.visibility === "advanced") {
+            return null;
+          }
+          const visibleFields = fieldGroup.fields.filter(
+            (field) => !(simpleMode && field.visibility === "advanced"),
+          );
+          if (visibleFields.length === 0) {
+            return null;
+          }
+          return (
+            <div key={fieldGroup.label} className="space-y-8 sm:space-y-5">
+              <div>
+                <Heading as="h4" className="font-medium">
+                  {fieldGroup.label}
+                </Heading>
+                <Subtle>{fieldGroup.description}</Subtle>
+                <Subtle className="font-semibold">{fieldGroup?.notes}</Subtle>
+              </div>
 
-            {fieldGroup.fields.map((field) => {
-              const error = get(formState.errors, field.name as string);
-              return (
-                <FieldWrapper
-                  key={field.label}
-                  label={field.label}
-                  fieldName={field.name}
-                  description={field.description}
-                  valid={!error}
-                  validationText={
-                    error
-                      ? String(
-                          t([`formValidation.${error.type}`, error.message], {
-                            returnObjects: false,
-                            ...error.params,
-                          }),
-                        )
-                      : ""
-                  }
-                >
-                  <DynamicFormField
-                    field={field}
-                    control={control}
-                    disabled={isDisabled(field.disabledBy, field.disabled)}
-                    isDirty={getFieldState(field.name).isDirty}
-                    invalid={getFieldState(field.name).invalid}
-                  />
-                </FieldWrapper>
-              );
-            })}
-          </div>
-        ))}
+              {visibleFields.map((field) => {
+                const error = get(formState.errors, field.name as string);
+                return (
+                  <FieldWrapper
+                    key={field.label}
+                    label={field.label}
+                    fieldName={field.name}
+                    description={field.description}
+                    valid={!error}
+                    validationText={
+                      error
+                        ? String(
+                            t([`formValidation.${error.type}`, error.message], {
+                              returnObjects: false,
+                              ...error.params,
+                            }),
+                          )
+                        : ""
+                    }
+                  >
+                    <DynamicFormField
+                      field={field}
+                      control={control}
+                      disabled={isDisabled(field.disabledBy, field.disabled)}
+                      isDirty={getFieldState(field.name).isDirty}
+                      invalid={getFieldState(field.name).invalid}
+                    />
+                  </FieldWrapper>
+                );
+              })}
+            </div>
+          );
+        })}
         {hasSubmitButton && (
           <Button type="submit" variant="outline" disabled={!formState.isValid}>
             {t("button.submit")}

@@ -6,11 +6,12 @@ import { type PersistOptions, persist, subscribeWithSelector } from "zustand/mid
 import type { RasterSource } from "./types.ts";
 
 const IDB_KEY_NAME = "meshtastic-app-store";
-const CURRENT_STORE_VERSION = 0;
+const CURRENT_STORE_VERSION = 1;
 
 type AppData = {
   // Persisted data
   rasterSources: RasterSource[];
+  simpleMode: boolean;
 };
 
 export interface AppState extends AppData {
@@ -29,11 +30,13 @@ export interface AppState extends AppData {
   setNodeNumToBeRemoved: (nodeNum: number) => void;
   setConnectDialogOpen: (open: boolean) => void;
   setNodeNumDetails: (nodeNum: number) => void;
+  setSimpleMode: (value: boolean) => void;
 }
 
 export const deviceStoreInitializer: StateCreator<AppState> = (set, _get) => ({
   selectedDeviceId: 0,
   rasterSources: [],
+  simpleMode: true,
   commandPaletteOpen: false,
   connectDialogOpen: false,
   nodeNumToBeRemoved: 0,
@@ -86,6 +89,13 @@ export const deviceStoreInitializer: StateCreator<AppState> = (set, _get) => ({
     set(() => ({
       nodeNumDetails: nodeNum,
     })),
+  setSimpleMode: (value: boolean) => {
+    set(
+      produce<AppState>((draft) => {
+        draft.simpleMode = value;
+      }),
+    );
+  },
 });
 
 const persistOptions: PersistOptions<AppState, AppData> = {
@@ -94,6 +104,7 @@ const persistOptions: PersistOptions<AppState, AppData> = {
   version: CURRENT_STORE_VERSION,
   partialize: (s): AppData => ({
     rasterSources: s.rasterSources,
+    simpleMode: s.simpleMode,
   }),
   onRehydrateStorage: () => (state) => {
     if (!state) {

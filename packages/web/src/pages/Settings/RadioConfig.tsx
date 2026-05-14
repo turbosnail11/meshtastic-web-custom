@@ -3,6 +3,7 @@ import { LoRa } from "@components/PageComponents/Settings/LoRa.tsx";
 import { Security } from "@components/PageComponents/Settings/Security/Security.tsx";
 import { Spinner } from "@components/UI/Spinner.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@components/UI/Tabs.tsx";
+import { useSimpleMode } from "@core/hooks/useSimpleMode.ts";
 import { useDevice, type ValidConfigType } from "@core/stores";
 import { type ComponentType, Suspense, useMemo } from "react";
 import type { UseFormReturn } from "react-hook-form";
@@ -17,11 +18,13 @@ type TabItem = {
   label: string;
   element: ComponentType<ConfigProps>;
   count?: number;
+  visibility?: "advanced";
 };
 
 export const RadioConfig = ({ onFormInit }: ConfigProps) => {
   const { hasConfigChange } = useDevice();
   const { t } = useTranslation("config");
+  const simpleMode = useSimpleMode();
   const tabs: TabItem[] = useMemo(
     () => [
       {
@@ -38,21 +41,29 @@ export const RadioConfig = ({ onFormInit }: ConfigProps) => {
         case: "security",
         label: t("page.tabSecurity"),
         element: Security,
+        visibility: "advanced",
       },
     ],
     [t],
   );
 
+  const visibleTabs = useMemo(
+    () => tabs.filter((tab) => !(simpleMode && tab.visibility === "advanced")),
+    [tabs, simpleMode],
+  );
+
   const flags = useMemo(
     () =>
-      new Map(tabs.map((tab) => [tab.case, tab.case !== "channels" && hasConfigChange(tab.case)])),
-    [tabs, hasConfigChange],
+      new Map(
+        visibleTabs.map((tab) => [tab.case, tab.case !== "channels" && hasConfigChange(tab.case)]),
+      ),
+    [visibleTabs, hasConfigChange],
   );
 
   return (
     <Tabs defaultValue={t("page.tabLora")}>
       <TabsList className="w-full dark:bg-slate-700">
-        {tabs.map((tab) => (
+        {visibleTabs.map((tab) => (
           <TabsTrigger key={tab.label} value={tab.label} className="dark:text-white relative">
             {tab.label}
             {flags.get(tab.case) && (
@@ -64,7 +75,7 @@ export const RadioConfig = ({ onFormInit }: ConfigProps) => {
           </TabsTrigger>
         ))}
       </TabsList>
-      {tabs.map((tab) => (
+      {visibleTabs.map((tab) => (
         <TabsContent key={tab.label} value={tab.label}>
           <Suspense fallback={<Spinner size="lg" className="my-5" />}>
             <tab.element onFormInit={onFormInit} />

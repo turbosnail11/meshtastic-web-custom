@@ -1,9 +1,11 @@
 import { deviceRoute, moduleRoute, radioRoute } from "@app/routes";
 import { toBinary } from "@bufbuild/protobuf";
+import { AdvancedSettingsToggle } from "@components/AdvancedSettingsToggle.tsx";
 import { PageLayout } from "@components/PageLayout.tsx";
 import { Sidebar } from "@components/Sidebar.tsx";
 import { SidebarButton } from "@components/UI/Sidebar/SidebarButton.tsx";
 import { SidebarSection } from "@components/UI/Sidebar/SidebarSection.tsx";
+import { useSimpleMode } from "@core/hooks/useSimpleMode.ts";
 import { useToast } from "@core/hooks/useToast.ts";
 import { useDevice } from "@core/stores";
 import { cn } from "@core/utils/cn.ts";
@@ -49,6 +51,7 @@ const ConfigPage = () => {
   const navigate = useNavigate();
   const routerState = useRouterState();
   const { t } = useTranslation("config");
+  const simpleMode = useSimpleMode();
 
   const configChangeCount = getConfigChangeCount();
   const moduleConfigChangeCount = getModuleConfigChangeCount();
@@ -64,6 +67,7 @@ const ConfigPage = () => {
         icon: RadioTowerIcon,
         changeCount: configChangeCount,
         component: RadioConfig,
+        visibility: undefined as "advanced" | undefined,
       },
       {
         key: "device",
@@ -72,6 +76,7 @@ const ConfigPage = () => {
         icon: RouterIcon,
         changeCount: moduleConfigChangeCount,
         component: DeviceConfig,
+        visibility: undefined as "advanced" | undefined,
       },
       {
         key: "module",
@@ -80,15 +85,21 @@ const ConfigPage = () => {
         icon: LayersIcon,
         changeCount: channelChangeCount,
         component: ModuleConfig,
+        visibility: "advanced" as const,
       },
     ],
     [t, configChangeCount, moduleConfigChangeCount, channelChangeCount],
   );
 
+  const visibleSections = useMemo(
+    () => sections.filter((s) => !(simpleMode && s.visibility === "advanced")),
+    [sections, simpleMode],
+  );
+
   const activeSection =
-    sections.find((section) =>
+    visibleSections.find((section) =>
       routerState.location.pathname.includes(`/settings/${section.key}`),
-    ) ?? sections[0];
+    ) ?? visibleSections[0];
 
   const onFormInit = useCallback(<T extends FieldValues>(methods: UseFormReturn<T>) => {
     setFormMethods(methods as UseFormReturn);
@@ -241,7 +252,7 @@ const ConfigPage = () => {
     () => (
       <Sidebar>
         <SidebarSection label={t("sidebar.label")} className="py-2 px-0">
-          {sections.map((section) => (
+          {visibleSections.map((section) => (
             <SidebarButton
               key={section.key}
               label={section.label}
@@ -255,7 +266,7 @@ const ConfigPage = () => {
         </SidebarSection>
       </Sidebar>
     ),
-    [sections, activeSection?.key, navigate, t],
+    [visibleSections, activeSection?.key, navigate, t],
   );
 
   const hasDrafts =
@@ -328,6 +339,7 @@ const ConfigPage = () => {
       label={activeSection?.label ?? ""}
       actions={actions}
     >
+      <AdvancedSettingsToggle />
       {ActiveComponent && <ActiveComponent onFormInit={onFormInit} />}
     </PageLayout>
   );
