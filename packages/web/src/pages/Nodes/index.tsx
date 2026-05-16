@@ -200,38 +200,56 @@ function directSignalStrength(percent: number): {
   };
 }
 
-function DirectSignalStrength({ percent }: { percent: number }): JSX.Element {
+function DirectSignalStrength({
+  percent,
+  snr,
+  rssi,
+}: {
+  percent: number;
+  snr?: number;
+  rssi?: number;
+}): JSX.Element {
   const { t } = useTranslation("nodes");
   const strength = directSignalStrength(percent);
   const label = t(`nodesTable.connectionStatus.signal.${strength.key}`);
   const roundedPercent = Math.round(percent);
 
   return (
-    <span
-      className="inline-flex items-center gap-1.5"
-      title={t("nodesTable.connectionStatus.signal.title", {
-        strength: label,
-        percent: roundedPercent,
-      })}
-      aria-label={t("nodesTable.connectionStatus.signal.title", {
-        strength: label,
-        percent: roundedPercent,
-      })}
-    >
-      <span className="inline-flex h-4 items-end gap-0.5" aria-hidden="true">
-        {[1, 2, 3].map((bar) => (
-          <span
-            key={bar}
-            className={cn(
-              "w-1 rounded-sm",
-              bar === 1 ? "h-1.5" : bar === 2 ? "h-2.5" : "h-4",
-              bar <= strength.bars ? strength.className : "bg-slate-300 dark:bg-slate-600",
-            )}
-          />
-        ))}
-      </span>
-      <span>{label}</span>
-    </span>
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1.5 cursor-pointer bg-transparent border-0 p-0"
+          aria-label={t("nodesTable.connectionStatus.signal.title", {
+            strength: label,
+            percent: roundedPercent,
+          })}
+        >
+          <span className="inline-flex h-4 items-end gap-0.5" aria-hidden="true">
+            {[1, 2, 3].map((bar) => (
+              <span
+                key={bar}
+                className={cn(
+                  "w-1 rounded-sm",
+                  bar === 1 ? "h-1.5" : bar === 2 ? "h-2.5" : "h-4",
+                  bar <= strength.bars ? strength.className : "bg-slate-300 dark:bg-slate-600",
+                )}
+              />
+            ))}
+          </span>
+          <span>{label}</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-2">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+          <span>
+            {label} ({roundedPercent}%)
+          </span>
+          {snr !== undefined && <span>{snr} dB SNR</span>}
+          {rssi !== undefined && <span>{rssi} dBm RSSI</span>}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -342,11 +360,13 @@ const NodesPage = (): JSX.Element => {
     nodes: filteredNodes,
     hasNodeError,
     getNodePacketMetadata,
+    getNode,
   } = useNodeDB(
     (db) => ({
       nodes: db.getNodes(predicate, true),
       hasNodeError: db.hasNodeError,
       getNodePacketMetadata: db.getNodePacketMetadata,
+      getNode: db.getNode,
       _metadataRef: db.nodePacketMetadata,
       _errorsRef: db.nodeErrors, // include the Map ref so UI also re-renders on error changes
     }),
@@ -422,7 +442,6 @@ const NodesPage = (): JSX.Element => {
       sortable: true,
     },
     { title: t("nodesTable.headings.lastHeard"), sortable: true },
-    { title: t("unit.snr"), sortable: true },
     { title: t("nodesTable.headings.model"), sortable: true },
     { title: t("nodesTable.headings.macAddress"), sortable: true },
   ];
@@ -445,6 +464,7 @@ const NodesPage = (): JSX.Element => {
     const hopsAway = metadata?.hopsAway ?? node.hopsAway;
     const viaMqtt = metadata?.viaMqtt ?? node.viaMqtt;
     const directSnr = metadata?.directSnr;
+    const directRssi = metadata?.directRssi;
     const relayText =
       metadata?.relay.status === "resolved"
         ? metadata.relay.nodeName
@@ -486,7 +506,7 @@ const NodesPage = (): JSX.Element => {
                 <button
                   type="button"
                   onClick={() => handleNodeInfoDialog(node.num)}
-                  className="cursor-pointer underline whitespace-break-spaces bg-transparent border-0 p-0 text-left"
+                  className="cursor-pointer no-underline hover:underline whitespace-break-spaces bg-transparent border-0 p-0 text-left"
                 >
                   {longName}
                 </button>
@@ -515,7 +535,11 @@ const NodesPage = (): JSX.Element => {
           content: (
             <Mono className="w-16">
               {hasFreshDirectSignal ? (
-                <DirectSignalStrength percent={directSignalPercent} />
+                <DirectSignalStrength
+                  percent={directSignalPercent}
+                  snr={directSnr}
+                  rssi={directRssi}
+                />
               ) : hopsAway !== undefined ? (
                 viaMqtt === false && hopsAway === 0 ? (
                   t("nodesTable.connectionStatus.direct")
@@ -538,7 +562,34 @@ const NodesPage = (): JSX.Element => {
           sortValue: hopsAway ?? Number.MAX_SAFE_INTEGER,
         },
         {
-          content: <Mono>{relayText}</Mono>,
+          content: (
+            <Mono>
+              {hasFreshDirectSignal &&
+              directSnr !== undefined &&
+              directSignalPercent !== undefined ? (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                  {directSnr !== undefined && <span>{directSnr} dB SNR</span>}
+                  {directRssi !== undefined && <span>{directRssi} dBm RSSI</span>}
+                  <span>{Math.round(directSignalPercent)}% quality</span>
+                </div>
+              ) : metadata?.relay.status === "resolved" ? (
+                <NodeContextMenu
+                  node={getNode(metadata.relay.nodeNum)}
+                  isSelf={metadata.relay.nodeNum === hardware.myNodeNum}
+                >
+                  <button
+                    type="button"
+                    onClick={() => handleNodeInfoDialog(metadata.relay.nodeNum)}
+                    className="cursor-pointer no-underline hover:underline bg-transparent border-0 p-0 text-left font-mono"
+                  >
+                    {relayText}
+                  </button>
+                </NodeContextMenu>
+              ) : (
+                relayText
+              )}
+            </Mono>
+          ),
           sortValue: relayText,
         },
         {
@@ -552,36 +603,6 @@ const NodesPage = (): JSX.Element => {
             </Mono>
           ),
           sortValue: node.lastHeard,
-        },
-        {
-          content: (
-            <Mono
-              className={metadata?.directSignalStale ? "text-yellow-600 dark:text-yellow-300" : ""}
-              title={
-                metadata?.directSignalStale
-                  ? t("nodesTable.signal.staleTitle", {
-                      defaultValue: "Last direct signal is stale",
-                    })
-                  : undefined
-              }
-            >
-              {directSnr === undefined || directSignalPercent === undefined ? (
-                t("nodesTable.signal.none", {
-                  defaultValue: "No direct signal",
-                })
-              ) : (
-                <>
-                  {directSnr}
-                  {t("unit.dbm")}/{directSignalPercent}%/{(directSnr + 10) * 5}
-                  {t("unit.raw")}
-                  {metadata?.directSignalStale
-                    ? ` ${t("nodesTable.signal.stale", { defaultValue: "(stale)" })}`
-                    : ""}
-                </>
-              )}
-            </Mono>
-          ),
-          sortValue: directSnr ?? Number.NEGATIVE_INFINITY,
         },
         {
           content: <Mono>{Protobuf.Mesh.HardwareModel[node.user?.hwModel ?? 0]}</Mono>,

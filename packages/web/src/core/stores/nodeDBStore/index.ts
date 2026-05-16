@@ -409,6 +409,22 @@ function nodeDBFactory(
             });
             nodeDB.nodeMap = new Map(nodeDB.nodeMap).set(data.from, newNode);
           }
+
+          // Update lastHeard on the relay node that forwarded this packet to us
+          if (!isDirectSignal && data.relayNode) {
+            const relayByte = data.relayNode & 0xff;
+            for (const [relayNum, relayEntry] of nodeDB.nodeMap) {
+              if (relayNum !== data.from && (relayNum & 0xff) === relayByte) {
+                if (!relayEntry.lastHeard || heardAt > relayEntry.lastHeard) {
+                  nodeDB.nodeMap = new Map(nodeDB.nodeMap).set(relayNum, {
+                    ...relayEntry,
+                    lastHeard: heardAt,
+                  });
+                }
+                break;
+              }
+            }
+          }
         }),
       ),
 

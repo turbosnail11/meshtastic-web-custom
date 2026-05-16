@@ -11,7 +11,7 @@ import { useFavoriteNode } from "@core/hooks/useFavoriteNode.ts";
 import { useIgnoreNode } from "@core/hooks/useIgnoreNode.ts";
 import { useSimpleMode } from "@core/hooks/useSimpleMode.ts";
 import { useToast } from "@core/hooks/useToast.ts";
-import { useDevice } from "@core/stores";
+import { useAppStore, useDevice } from "@core/stores";
 import { Protobuf } from "@meshtastic/core";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -70,7 +70,8 @@ export function NodeContextMenu({
   asChild = true,
   isSelf = false,
 }: NodeContextMenuProps) {
-  const { connection } = useDevice();
+  const { connection, setDialogOpen } = useDevice();
+  const { setNodeNumToBeRemoved } = useAppStore();
   const navigate = useNavigate();
   const { toast } = useToast();
   const { t } = useTranslation("nodes");
@@ -171,23 +172,9 @@ export function NodeContextMenu({
     updateIgnored({ nodeNum, isIgnored: !node.isIgnored });
   };
 
-  const handleRemove = async () => {
-    if (!connection) return;
-    try {
-      await connection.removeNodeByNum(nodeNum);
-      toast({
-        title: t("toast.removeNode", {
-          defaultValue: `Removed ${nodeName} from NodeDB`,
-        }),
-      });
-    } catch (err) {
-      toast({
-        title: t("toast.removeNodeFailed", {
-          defaultValue: "Failed to remove node",
-        }),
-        description: String(err),
-      });
-    }
+  const handleRemove = () => {
+    setNodeNumToBeRemoved(nodeNum);
+    setDialogOpen("nodeRemoval", true);
   };
 
   return (
@@ -251,7 +238,7 @@ export function NodeContextMenu({
             </ContextMenuItem>
             <ContextMenuItem onSelect={handleRemove} destructive data-testid="action-remove">
               <Trash2Icon className="h-4 w-4" />
-              Remove from NodeDB
+              Remove Node
             </ContextMenuItem>
           </>
         )}
